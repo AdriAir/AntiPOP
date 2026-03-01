@@ -19,10 +19,17 @@ struct AppConfig {
     // Valores mas bajos = mas fluido pero mas uso de CPU/GPU.
     uint32_t captureIntervalMs = 100;  // ~10 FPS
 
-    // Margen extra alrededor de las detecciones (porcentaje, 0.1 = 10%)
-    float censorExpansion = 0.15f;
+    // Margen extra alrededor de las detecciones (porcentaje, 0.3 = 30%)
+    float censorExpansion = 0.30f;
 
-    // Color de la censura (formato RGB)
+    // Tipo de censura: 0=solido (negro), 1=pixelado (mosaico)
+    int censorType = 1;
+
+    // Tamano del bloque de pixelado en pixels (solo si censorType=1)
+    // Valores recomendados: 8, 12, 16 (mas alto = menos detalle visible)
+    int pixelateBlockSize = 12;
+
+    // Color de la censura (formato RGB) - solo para censorType=0
     uint8_t censorColorR = 0;
     uint8_t censorColorG = 0;
     uint8_t censorColorB = 0;

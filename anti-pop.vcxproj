@@ -158,6 +158,7 @@
     <ClInclude Include="src\detector\Detection.h" />
     <ClInclude Include="src\detector\IContentDetector.h" />
     <ClInclude Include="src\detector\OnnxDetector.h" />
+    <ClInclude Include="src\detector\DetectionTracker.h" />
     <!-- Overlay de censura -->
     <ClInclude Include="src\overlay\IOverlay.h" />
     <ClInclude Include="src\overlay\OverlayWindow.h" />
@@ -176,6 +177,7 @@
     <ClCompile Include="anti-pop.cpp" />
     <ClCompile Include="src\capture\DxgiCapture.cpp" />
     <ClCompile Include="src\detector\OnnxDetector.cpp" />
+    <ClCompile Include="src\detector\DetectionTracker.cpp" />
     <ClCompile Include="src\overlay\OverlayWindow.cpp" />
     <ClCompile Include="src\config\Config.cpp" />
     <ClCompile Include="src\config\AutoStart.cpp" />

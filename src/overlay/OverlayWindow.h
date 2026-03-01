@@ -25,6 +25,14 @@ public:
     // Color y estilo del bloqueo de censura
     void SetCensorColor(COLORREF color) { m_censorColor = color; }
 
+    // Tipo y configuracion de censura
+    // censorType: 0=solido, 1=pixelado
+    // pixelateBlockSize: tamano del bloque de pixelado en pixels
+    void SetCensorStyle(int censorType, int pixelateBlockSize = 12) {
+        m_censorType = censorType;
+        m_pixelateBlockSize = pixelateBlockSize;
+    }
+
 private:
     // Window procedure estatico (reenvía a la instancia)
     static LRESULT CALLBACK StaticWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
@@ -39,6 +47,10 @@ private:
     HWND      m_hwnd        = nullptr;
     HINSTANCE m_hInstance    = nullptr;
     COLORREF  m_censorColor = RGB(0, 0, 0);  // Negro por defecto
+
+    // Tipo de censura: 0=solido (rectangulo negro), 1=pixelado (mosaico)
+    int m_censorType = 1;  // Por defecto pixelado
+    int m_pixelateBlockSize = 12;  // Tamano del bloque de pixelado
 
     // Detecciones actuales que deben censurarse
     std::mutex                       m_detectionsMutex;

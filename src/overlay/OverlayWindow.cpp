@@ -149,31 +149,67 @@ void OverlayWindow::Repaint() {
     FillRect(hdcMem, &clientRect, hTransBrush);
     DeleteObject(hTransBrush);
 
-    // Dibujar rectangulos de censura sobre las detecciones
+    // Dibujar censura sobre las detecciones
     {
         std::lock_guard lock(m_detectionsMutex);
         if (!m_currentDetections.empty()) {
-            // Usar un color ligeramente distinto al color key para las censuras
-            COLORREF censorColor = (m_censorColor == RGB(0, 0, 0))
-                                   ? RGB(1, 1, 1)   // Casi negro pero no el color key
-                                   : m_censorColor;
-            HBRUSH hCensorBrush = CreateSolidBrush(censorColor);
+            if (m_censorType == 0) {
+                // Modo: Rectangulo solido (negro)
+                COLORREF censorColor = (m_censorColor == RGB(0, 0, 0))
+                                       ? RGB(1, 1, 1)
+                                       : m_censorColor;
+                HBRUSH hCensorBrush = CreateSolidBrush(censorColor);
 
-            for (const auto& det : m_currentDetections) {
-                // Expandir un 10% para asegurar cobertura completa
-                auto expanded = det.box.Expanded(0.1f);
-                RECT r = expanded.ToRECT();
+                for (const auto& det : m_currentDetections) {
+                    auto expanded = det.box.Expanded(0.1f);
+                    RECT r = expanded.ToRECT();
 
-                // Clamp a los limites de la ventana
-                r.left   = std::max(r.left, 0L);
-                r.top    = std::max(r.top, 0L);
-                r.right  = std::min(r.right, static_cast<LONG>(width));
-                r.bottom = std::min(r.bottom, static_cast<LONG>(height));
+                    r.left   = std::max(r.left, 0L);
+                    r.top    = std::max(r.top, 0L);
+                    r.right  = std::min(r.right, static_cast<LONG>(width));
+                    r.bottom = std::min(r.bottom, static_cast<LONG>(height));
 
-                FillRect(hdcMem, &r, hCensorBrush);
+                    FillRect(hdcMem, &r, hCensorBrush);
+                }
+
+                DeleteObject(hCensorBrush);
+
+            } else if (m_censorType == 1) {
+                // Modo: Pixelado (mosaico) - mas estetico
+                for (const auto& det : m_currentDetections) {
+                    auto expanded = det.box.Expanded(0.1f);
+                    RECT r = expanded.ToRECT();
+
+                    r.left   = std::max(r.left, 0L);
+                    r.top    = std::max(r.top, 0L);
+                    r.right  = std::min(r.right, static_cast<LONG>(width));
+                    r.bottom = std::min(r.bottom, static_cast<LONG>(height));
+
+                    // Dibujar bloques de pixelado
+                    const int blockSize = m_pixelateBlockSize;
+                    for (LONG by = r.top; by < r.bottom; by += blockSize) {
+                        for (LONG bx = r.left; bx < r.right; bx += blockSize) {
+                            RECT blockRect = {
+                                bx,
+                                by,
+                                std::min(bx + blockSize, r.right),
+                                std::min(by + blockSize, r.bottom)
+                            };
+
+                            // Variar el color del bloque para efecto visual
+                            int colorVar = ((bx / blockSize) + (by / blockSize)) % 3;
+                            COLORREF blockColor;
+                            if (colorVar == 0) blockColor = RGB(40, 40, 40);
+                            else if (colorVar == 1) blockColor = RGB(50, 50, 50);
+                            else blockColor = RGB(60, 60, 60);
+
+                            HBRUSH hBlockBrush = CreateSolidBrush(blockColor);
+                            FillRect(hdcMem, &blockRect, hBlockBrush);
+                            DeleteObject(hBlockBrush);
+                        }
+                    }
+                }
             }
-
-            DeleteObject(hCensorBrush);
         }
     }
 

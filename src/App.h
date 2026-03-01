@@ -8,6 +8,7 @@
 #include "../framework.h"
 #include "capture/IScreenCapture.h"
 #include "detector/IContentDetector.h"
+#include "detector/DetectionTracker.h"
 #include "overlay/IOverlay.h"
 #include "config/Config.h"
 
@@ -60,6 +61,15 @@ private:
     // Control del hilo del pipeline
     std::thread   m_pipelineThread;
     std::atomic<bool> m_running{ false };
+
+    // Rastreador de detecciones para suavizacion entre frames
+    // Permite interpolacion suave y elimina salteos cuando los objetos se mueven
+    detector::DetectionTracker m_tracker;
+
+    // Temporal smoothing para evitar parpadeos de censura
+    // Mantiene las detecciones previas durante N frames si no hay nuevas detecciones
+    int m_framesWithoutDetection = 0;
+    static constexpr int kFramesToClearCensor = 12;  // Buffer temporal: 12 frames (~1200ms)
 
     // Bandeja del sistema
     NOTIFYICONDATAW m_trayIconData = {};

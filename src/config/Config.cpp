@@ -71,6 +71,10 @@ bool Config::Load(const std::filesystem::path& configPath) {
             m_config.captureIntervalMs = static_cast<uint32_t>(std::stoul(value));
         } else if (key == "censor_expansion") {
             m_config.censorExpansion = std::stof(value);
+        } else if (key == "censor_type") {
+            m_config.censorType = std::stoi(value);
+        } else if (key == "pixelate_block_size") {
+            m_config.pixelateBlockSize = std::stoi(value);
         } else if (key == "censor_color_r") {
             m_config.censorColorR = static_cast<uint8_t>(std::stoul(value));
         } else if (key == "censor_color_g") {
@@ -107,10 +111,16 @@ bool Config::Save() const {
     file << "# Intervalo entre capturas en milisegundos (menor = mas fluido, mas CPU)\n";
     file << "capture_interval_ms = " << m_config.captureIntervalMs << "\n\n";
 
-    file << "# Margen extra alrededor de las detecciones (0.15 = 15%)\n";
+    file << "# Margen extra alrededor de las detecciones (0.30 = 30%)\n";
     file << "censor_expansion = " << m_config.censorExpansion << "\n\n";
 
-    file << "# Color de censura (RGB, 0-255)\n";
+    file << "# Tipo de censura: 0=solido, 1=pixelado\n";
+    file << "censor_type = " << m_config.censorType << "\n\n";
+
+    file << "# Tamano del bloque de pixelado en pixels (solo si censor_type=1)\n";
+    file << "pixelate_block_size = " << m_config.pixelateBlockSize << "\n\n";
+
+    file << "# Color de censura (RGB, 0-255) - solo para censor_type=0\n";
     file << "censor_color_r = " << static_cast<int>(m_config.censorColorR) << "\n";
     file << "censor_color_g = " << static_cast<int>(m_config.censorColorG) << "\n";
     file << "censor_color_b = " << static_cast<int>(m_config.censorColorB) << "\n\n";

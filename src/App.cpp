@@ -64,10 +64,15 @@ bool App::Initialize(HINSTANCE hInstance, bool silentMode) {
         return false;
     }
 
-    // Configurar color de censura
+    // Configurar color y estilo de censura
     auto* overlayWin = dynamic_cast<overlay::OverlayWindow*>(m_overlay.get());
     if (overlayWin) {
         overlayWin->SetCensorColor(RGB(cfg.censorColorR, cfg.censorColorG, cfg.censorColorB));
+        overlayWin->SetCensorStyle(cfg.censorType, cfg.pixelateBlockSize);
+
+        const char* censorTypeStr = (cfg.censorType == 0) ? "solido" : "pixelado";
+        LOG_INFO("Censura configurada: tipo={}, bloque={}px",
+                 censorTypeStr, cfg.pixelateBlockSize);
     }
 
     LOG_INFO("AntiPop inicializado correctamente (silentMode={})", silentMode);
@@ -100,6 +105,8 @@ void App::Stop() {
         m_overlay->SetVisible(false);
     }
 
+    m_tracker.Reset();
+
     LOG_INFO("Pipeline de censura detenido");
 }
 
@@ -108,6 +115,9 @@ void App::PipelineLoop() {
     const auto interval = std::chrono::milliseconds(cfg.captureIntervalMs);
 
     LOG_INFO("Pipeline loop iniciado con intervalo de {}ms", cfg.captureIntervalMs);
+    LOG_INFO("Rastreo de detecciones activo: interpolacion suave entre frames");
+    LOG_INFO("Buffer temporal: {} frames (~{}ms)",
+             kFramesToClearCensor, kFramesToClearCensor * cfg.captureIntervalMs);
 
     while (m_running.load()) {
         auto frameStart = std::chrono::steady_clock::now();
@@ -137,13 +147,31 @@ void App::PipelineLoop() {
                 std::make_move_iterator(detections.end()));
         }
 
-        // Paso 3: Actualizar el overlay con todas las detecciones
-        if (!allDetections.empty()) {
-            m_overlay->UpdateCensorRegions(allDetections);
-            LOG_DEBUG("Detectados {} objetos para censurar en {} monitores",
-                      allDetections.size(), frames.size());
+        // Paso 3: Rastrear detecciones entre frames para interpolacion suave
+        // El tracker mantiene un historial y suaviza el movimiento de los cuadros
+        // de censura, eliminando salteos cuando los objetos se mueven
+        auto trackedDetections = m_tracker.UpdateAndGetTrackedDetections(
+            allDetections,
+            kFramesToClearCensor  // Frames para mantener objeto sin detectar
+        );
+
+        // Paso 4: Actualizar el overlay con las detecciones rastreadas
+        if (!trackedDetections.empty()) {
+            m_framesWithoutDetection = 0;
+            m_overlay->UpdateCensorRegions(trackedDetections);
+            if (!allDetections.empty()) {
+                LOG_DEBUG("Detectados {} objetos, rastreando {} (suavizados)",
+                          allDetections.size(), trackedDetections.size());
+            }
         } else {
-            m_overlay->ClearCensorRegions();
+            // Sin detecciones rastreadas
+            m_framesWithoutDetection++;
+
+            // Solo limpiar despues de muchos frames sin detecciones
+            if (m_framesWithoutDetection >= kFramesToClearCensor) {
+                m_overlay->ClearCensorRegions();
+                m_tracker.Reset();  // Resetear el rastreador cuando se limpia
+            }
         }
 
         // Dormir el tiempo restante del intervalo
