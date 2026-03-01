@@ -17,6 +17,8 @@ ipch/
 
 # NuGet packages (se restauran automaticamente)
 packages/
+*.nupkg
+*.nuspec
 
 # ============================================
 # Build outputs
