@@ -45,6 +45,10 @@ private:
     std::vector<detector::Detection> m_currentDetections;
 
     static constexpr wchar_t kOverlayClassName[] = L"AntiPopOverlay";
+
+    // Timer para re-afirmar la posicion topmost periodicamente
+    // (necesario para mantenerse encima de juegos borderless fullscreen)
+    static constexpr UINT_PTR kTimerReassertTopmost = 100;
 };
 
 } // namespace antipop::overlay

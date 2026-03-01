@@ -50,6 +50,10 @@ public:
     // Devuelve la ruta del directorio de la aplicacion (donde esta el .exe)
     [[nodiscard]] static std::filesystem::path GetAppDirectory();
 
+    // Devuelve el directorio del proyecto (donde esta la carpeta models/).
+    // Sube desde el directorio del exe hasta encontrarla. Fallback: GetAppDirectory().
+    [[nodiscard]] static std::filesystem::path GetProjectDirectory();
+
 private:
     AppConfig            m_config;
     std::filesystem::path m_configPath;

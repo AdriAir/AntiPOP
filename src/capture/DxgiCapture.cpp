@@ -1,4 +1,5 @@
 // DxgiCapture.cpp : Implementacion de la captura de pantalla via DXGI Desktop Duplication API.
+// Soporta multiples monitores: enumera todos los outputs y crea una duplicacion por cada uno.
 
 #include "DxgiCapture.h"
 #include "../utils/Logger.h"
@@ -25,25 +26,8 @@ bool DxgiCapture::Initialize() {
         return false;
     }
 
-    // Crear textura de staging para leer pixels de la GPU a CPU
-    D3D11_TEXTURE2D_DESC stagingDesc = {};
-    stagingDesc.Width              = m_width;
-    stagingDesc.Height             = m_height;
-    stagingDesc.MipLevels          = 1;
-    stagingDesc.ArraySize          = 1;
-    stagingDesc.Format             = DXGI_FORMAT_B8G8R8A8_UNORM;
-    stagingDesc.SampleDesc.Count   = 1;
-    stagingDesc.Usage              = D3D11_USAGE_STAGING;
-    stagingDesc.CPUAccessFlags     = D3D11_CPU_ACCESS_READ;
-
-    HRESULT hr = m_device->CreateTexture2D(&stagingDesc, nullptr, &m_stagingTexture);
-    if (FAILED(hr)) {
-        LOG_ERROR("No se pudo crear la textura de staging: 0x{:08X}", static_cast<unsigned>(hr));
-        return false;
-    }
-
     m_initialized = true;
-    LOG_INFO("DXGI Capture inicializado: {}x{}", m_width, m_height);
+    LOG_INFO("DXGI Capture inicializado con {} monitor(es)", m_monitors.size());
     return true;
 }
 
@@ -84,91 +68,123 @@ bool DxgiCapture::InitializeDuplication() {
     hr = dxgiDevice->GetAdapter(&adapter);
     if (FAILED(hr)) return false;
 
-    // Obtener el output principal (monitor primario)
+    // Enumerar TODOS los monitores conectados
     Microsoft::WRL::ComPtr<IDXGIOutput> output;
-    hr = adapter->EnumOutputs(0, &output);
-    if (FAILED(hr)) {
-        LOG_ERROR("No se encontro monitor primario");
-        return false;
+    for (UINT i = 0; adapter->EnumOutputs(i, &output) != DXGI_ERROR_NOT_FOUND; ++i) {
+        // Necesitamos IDXGIOutput1 para Desktop Duplication
+        Microsoft::WRL::ComPtr<IDXGIOutput1> output1;
+        hr = output.As(&output1);
+        if (FAILED(hr)) {
+            output.Reset();
+            continue;
+        }
+
+        // Obtener las dimensiones y posicion del monitor
+        DXGI_OUTPUT_DESC desc;
+        output->GetDesc(&desc);
+
+        MonitorCapture mon;
+        mon.width   = desc.DesktopCoordinates.right  - desc.DesktopCoordinates.left;
+        mon.height  = desc.DesktopCoordinates.bottom - desc.DesktopCoordinates.top;
+        mon.originX = desc.DesktopCoordinates.left;
+        mon.originY = desc.DesktopCoordinates.top;
+
+        // Crear la duplicacion del escritorio para este monitor
+        hr = output1->DuplicateOutput(m_device.Get(), &mon.duplication);
+        if (FAILED(hr)) {
+            LOG_WARN("No se pudo duplicar monitor {}: 0x{:08X}", i, static_cast<unsigned>(hr));
+            output.Reset();
+            continue;
+        }
+
+        // Crear textura de staging para leer pixels de la GPU a CPU
+        D3D11_TEXTURE2D_DESC stagingDesc = {};
+        stagingDesc.Width            = mon.width;
+        stagingDesc.Height           = mon.height;
+        stagingDesc.MipLevels        = 1;
+        stagingDesc.ArraySize        = 1;
+        stagingDesc.Format           = DXGI_FORMAT_B8G8R8A8_UNORM;
+        stagingDesc.SampleDesc.Count = 1;
+        stagingDesc.Usage            = D3D11_USAGE_STAGING;
+        stagingDesc.CPUAccessFlags   = D3D11_CPU_ACCESS_READ;
+
+        hr = m_device->CreateTexture2D(&stagingDesc, nullptr, &mon.stagingTexture);
+        if (FAILED(hr)) {
+            LOG_WARN("No se pudo crear staging texture para monitor {}: 0x{:08X}",
+                     i, static_cast<unsigned>(hr));
+            output.Reset();
+            continue;
+        }
+
+        LOG_INFO("Monitor {} registrado: {}x{} en ({}, {})",
+                 i, mon.width, mon.height, mon.originX, mon.originY);
+        m_monitors.push_back(std::move(mon));
+        output.Reset();
     }
 
-    // Necesitamos IDXGIOutput1 para Desktop Duplication
-    Microsoft::WRL::ComPtr<IDXGIOutput1> output1;
-    hr = output.As(&output1);
-    if (FAILED(hr)) return false;
-
-    // Obtener las dimensiones del monitor
-    DXGI_OUTPUT_DESC outputDesc;
-    output->GetDesc(&outputDesc);
-    m_width  = outputDesc.DesktopCoordinates.right  - outputDesc.DesktopCoordinates.left;
-    m_height = outputDesc.DesktopCoordinates.bottom - outputDesc.DesktopCoordinates.top;
-
-    // Crear la duplicacion del escritorio
-    hr = output1->DuplicateOutput(m_device.Get(), &m_duplication);
-    if (FAILED(hr)) {
-        LOG_ERROR("DuplicateOutput fallo: 0x{:08X}. "
-                  "Asegurate de no estar en una sesion remota.", static_cast<unsigned>(hr));
+    if (m_monitors.empty()) {
+        LOG_ERROR("No se encontro ningun monitor para capturar");
         return false;
     }
 
     return true;
 }
 
-std::optional<CapturedFrame> DxgiCapture::CaptureFrame() {
-    if (!m_initialized) return std::nullopt;
+CapturedFrame DxgiCapture::CaptureMonitor(MonitorCapture& mon) {
+    CapturedFrame frame;
 
     DXGI_OUTDUPL_FRAME_INFO frameInfo;
     Microsoft::WRL::ComPtr<IDXGIResource> desktopResource;
 
-    // Intentar adquirir el siguiente frame (timeout de 100ms)
-    HRESULT hr = m_duplication->AcquireNextFrame(100, &frameInfo, &desktopResource);
+    // Intentar adquirir el siguiente frame (timeout de 50ms por monitor)
+    HRESULT hr = mon.duplication->AcquireNextFrame(50, &frameInfo, &desktopResource);
 
     if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
-        // No hay frame nuevo, no es un error
-        return std::nullopt;
+        return frame;  // No hay frame nuevo, devolver frame vacio (IsValid() = false)
     }
 
     if (FAILED(hr)) {
-        // Si la duplicacion se perdio (cambio de resolucion, etc.), reinicializar
         if (hr == DXGI_ERROR_ACCESS_LOST) {
-            LOG_WARN("Desktop Duplication perdido, reinicializando...");
-            m_duplication.Reset();
-            m_stagingTexture.Reset();
-            m_initialized = false;
-            Initialize();
+            LOG_WARN("Desktop Duplication perdido en monitor ({}, {}), reinicializando...",
+                     mon.originX, mon.originY);
+            Shutdown();
+            if (!Initialize()) {
+                LOG_ERROR("Fallo al reinicializar Desktop Duplication");
+            }
         }
-        return std::nullopt;
+        return frame;
     }
 
     // Obtener la textura del frame capturado
     Microsoft::WRL::ComPtr<ID3D11Texture2D> desktopTexture;
     hr = desktopResource.As(&desktopTexture);
     if (FAILED(hr)) {
-        m_duplication->ReleaseFrame();
-        return std::nullopt;
+        mon.duplication->ReleaseFrame();
+        return frame;
     }
 
     // Copiar la textura del escritorio a nuestra textura de staging
-    m_context->CopyResource(m_stagingTexture.Get(), desktopTexture.Get());
+    m_context->CopyResource(mon.stagingTexture.Get(), desktopTexture.Get());
 
     // Mapear la textura de staging para leer los pixels en CPU
     D3D11_MAPPED_SUBRESOURCE mapped;
-    hr = m_context->Map(m_stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    hr = m_context->Map(mon.stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
     if (FAILED(hr)) {
-        m_duplication->ReleaseFrame();
-        return std::nullopt;
+        mon.duplication->ReleaseFrame();
+        return frame;
     }
 
     // Construir el frame capturado
-    CapturedFrame frame;
-    frame.width  = m_width;
-    frame.height = m_height;
-    frame.stride = m_width * 4;
-    frame.data.resize(frame.stride * frame.height);
+    frame.width   = mon.width;
+    frame.height  = mon.height;
+    frame.stride  = mon.width * 4;
+    frame.originX = mon.originX;
+    frame.originY = mon.originY;
+    frame.data.resize(static_cast<size_t>(frame.stride) * frame.height);
 
     // Copiar fila por fila (el stride de la GPU puede diferir)
     const auto* src = static_cast<const uint8_t*>(mapped.pData);
-    for (uint32_t y = 0; y < m_height; ++y) {
+    for (uint32_t y = 0; y < mon.height; ++y) {
         std::memcpy(
             frame.data.data() + y * frame.stride,
             src + y * mapped.RowPitch,
@@ -176,17 +192,30 @@ std::optional<CapturedFrame> DxgiCapture::CaptureFrame() {
         );
     }
 
-    m_context->Unmap(m_stagingTexture.Get(), 0);
-    m_duplication->ReleaseFrame();
+    m_context->Unmap(mon.stagingTexture.Get(), 0);
+    mon.duplication->ReleaseFrame();
 
     return frame;
 }
 
-void DxgiCapture::Shutdown() {
-    if (m_duplication) {
-        m_duplication.Reset();
+std::vector<CapturedFrame> DxgiCapture::CaptureAllFrames() {
+    if (!m_initialized) return {};
+
+    std::vector<CapturedFrame> frames;
+    frames.reserve(m_monitors.size());
+
+    for (auto& mon : m_monitors) {
+        auto frame = CaptureMonitor(mon);
+        if (frame.IsValid()) {
+            frames.push_back(std::move(frame));
+        }
     }
-    m_stagingTexture.Reset();
+
+    return frames;
+}
+
+void DxgiCapture::Shutdown() {
+    m_monitors.clear();
     m_context.Reset();
     m_device.Reset();
     m_initialized = false;

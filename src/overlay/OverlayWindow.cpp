@@ -59,6 +59,9 @@ bool OverlayWindow::Initialize(HINSTANCE hInstance) {
     // Usamos UpdateLayeredWindow con un bitmap para control per-pixel.
     SetLayeredWindowAttributes(m_hwnd, RGB(0, 0, 0), 0, LWA_COLORKEY);
 
+    // Timer para re-afirmar topmost periodicamente (compatibilidad con juegos)
+    SetTimer(m_hwnd, kTimerReassertTopmost, 2000, nullptr);
+
     LOG_INFO("Overlay inicializado: {}x{} en ({}, {})", screenW, screenH, screenX, screenY);
     return true;
 }
@@ -105,6 +108,13 @@ LRESULT OverlayWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
     }
     case WM_ERASEBKGND:
         return 1;  // No borrar el fondo (evita parpadeo)
+    case WM_TIMER:
+        if (wp == kTimerReassertTopmost) {
+            // Re-afirmar posicion topmost (algunas apps/juegos luchan por ser topmost)
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+        return 0;
     case WM_DISPLAYCHANGE:
         // Cambio de resolucion: reposicionar la ventana
         {
@@ -225,6 +235,7 @@ void OverlayWindow::SetVisible(bool visible) {
 
 void OverlayWindow::Shutdown() {
     if (m_hwnd) {
+        KillTimer(m_hwnd, kTimerReassertTopmost);
         DestroyWindow(m_hwnd);
         m_hwnd = nullptr;
     }

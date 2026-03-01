@@ -1,4 +1,6 @@
+# ============================================
 # Visual Studio
+# ============================================
 .vs/
 x64/
 Debug/
@@ -11,8 +13,14 @@ Release/
 *.VC.db
 *.VC.opendb
 ipch/
+*.aps
 
+# NuGet packages (se restauran automaticamente)
+packages/
+
+# ============================================
 # Build outputs
+# ============================================
 *.obj
 *.pdb
 *.ilk
@@ -20,28 +28,55 @@ ipch/
 *.dll
 *.lib
 *.exp
+*.log
+*.tlog
+*.idb
+*.iobj
+*.ipdb
+*.res
+*.lastbuildstate
+anti-pop/
 
+# ============================================
+# ONNX models (archivos grandes, no van en git)
+# ============================================
+models/*.onnx
+models/*.pt
+
+# ============================================
+# Training pipeline (datos locales)
+# ============================================
+training/dataset/images/
+training/dataset/labels/
+training/runs/
+training/venv/
+training/__pycache__/
+
+# ============================================
+# Runtime (generados por la app al ejecutarse)
+# ============================================
+antipop.cfg
+antipop.log
+
+# ============================================
+# OS
+# ============================================
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# ============================================
 # CMake (legacy)
+# ============================================
 CMakeLists.txt.user
 CMakeCache.txt
-CMakeFiles
-CMakeScripts
-Testing
+CMakeFiles/
+CMakeScripts/
+Testing/
 Makefile
 cmake_install.cmake
 install_manifest.txt
 compile_commands.json
 CTestTestfile.cmake
-_deps
+_deps/
 CMakeUserPresets.json
-
-# ONNX models (large binary files - download separately)
-models/*.onnx
-
-# Configuration and logs generated at runtime
-antipop.cfg
-antipop.log
-
-# OS
-Thumbs.db
-desktop.ini

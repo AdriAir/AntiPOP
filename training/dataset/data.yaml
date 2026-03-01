@@ -1,0 +1,12 @@
+# Configuracion del dataset para entrenamiento YOLOv8.
+# Las rutas son relativas a este archivo.
+
+train: ./images
+val: ./images
+
+# Numero de clases
+nc: 1
+
+# Nombres de las clases (deben coincidir con OnnxDetector::m_classNames)
+names:
+  - octopus

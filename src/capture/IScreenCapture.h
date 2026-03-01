@@ -16,6 +16,10 @@ struct CapturedFrame {
     uint32_t height = 0;
     uint32_t stride = 0;        // Bytes por fila (width * 4 normalmente)
 
+    // Posicion del monitor en el escritorio virtual (multi-monitor)
+    int32_t originX = 0;
+    int32_t originY = 0;
+
     [[nodiscard]] bool IsValid() const noexcept {
         return !data.empty() && width > 0 && height > 0;
     }
@@ -27,20 +31,15 @@ class IScreenCapture {
 public:
     virtual ~IScreenCapture() = default;
 
-    // Inicializa el sistema de captura.
-    // Devuelve true si la inicializacion fue exitosa.
+    // Inicializa el sistema de captura (todos los monitores).
     [[nodiscard]] virtual bool Initialize() = 0;
 
-    // Captura un frame de la pantalla.
-    // Devuelve nullopt si no hay frame nuevo disponible o si falla la captura.
-    [[nodiscard]] virtual std::optional<CapturedFrame> CaptureFrame() = 0;
+    // Captura un frame de cada monitor conectado.
+    // Devuelve un vector con los frames disponibles (puede estar vacio si no hay frames nuevos).
+    [[nodiscard]] virtual std::vector<CapturedFrame> CaptureAllFrames() = 0;
 
     // Libera los recursos de la captura.
     virtual void Shutdown() = 0;
-
-    // Devuelve las dimensiones de la pantalla capturada.
-    [[nodiscard]] virtual uint32_t GetWidth() const noexcept = 0;
-    [[nodiscard]] virtual uint32_t GetHeight() const noexcept = 0;
 };
 
 } // namespace antipop::capture

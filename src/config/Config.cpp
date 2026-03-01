@@ -15,6 +15,19 @@ std::filesystem::path Config::GetAppDirectory() {
     return std::filesystem::path(path).parent_path();
 }
 
+std::filesystem::path Config::GetProjectDirectory() {
+    auto dir = GetAppDirectory();
+    for (int i = 0; i < 5; ++i) {
+        if (std::filesystem::exists(dir / "models")) {
+            return dir;
+        }
+        auto parent = dir.parent_path();
+        if (parent == dir) break;
+        dir = parent;
+    }
+    return GetAppDirectory();
+}
+
 bool Config::Load(const std::filesystem::path& configPath) {
     m_configPath = configPath;
 

@@ -30,9 +30,13 @@ bool App::Initialize(HINSTANCE hInstance, bool silentMode) {
 
     // 2. Configurar inicio automatico segun configuracion
     if (cfg.autoStartEnabled && !config::AutoStart::IsEnabled()) {
-        config::AutoStart::Enable();
+        if (!config::AutoStart::Enable()) {
+            LOG_WARN("No se pudo habilitar el inicio automatico con Windows");
+        }
     } else if (!cfg.autoStartEnabled && config::AutoStart::IsEnabled()) {
-        config::AutoStart::Disable();
+        if (!config::AutoStart::Disable()) {
+            LOG_WARN("No se pudo deshabilitar el inicio automatico con Windows");
+        }
     }
 
     // 3. Inicializar captura de pantalla (DXGI Desktop Duplication)
@@ -44,7 +48,7 @@ bool App::Initialize(HINSTANCE hInstance, bool silentMode) {
 
     // 4. Inicializar detector de IA (ONNX Runtime)
     m_detector = std::make_unique<detector::OnnxDetector>();
-    auto modelPath = config::Config::GetAppDirectory() / cfg.modelPath;
+    auto modelPath = config::Config::GetProjectDirectory() / cfg.modelPath;
     if (!m_detector->Initialize(modelPath)) {
         // No es un error fatal: la app puede funcionar sin modelo
         // (util durante desarrollo antes de tener el modelo entrenado)
@@ -108,25 +112,38 @@ void App::PipelineLoop() {
     while (m_running.load()) {
         auto frameStart = std::chrono::steady_clock::now();
 
-        // Paso 1: Capturar frame de la pantalla
-        auto frame = m_capture->CaptureFrame();
+        // Paso 1: Capturar frames de todos los monitores
+        auto frames = m_capture->CaptureAllFrames();
 
-        if (frame && frame->IsValid()) {
-            // Paso 2: Detectar pulpos en el frame
+        std::vector<detector::Detection> allDetections;
+
+        for (auto& frame : frames) {
+            // Paso 2: Detectar pulpos en cada frame
             auto detections = m_detector->Detect(
-                frame->data.data(),
-                frame->width,
-                frame->height,
-                frame->stride
+                frame.data.data(),
+                frame.width,
+                frame.height,
+                frame.stride
             );
 
-            // Paso 3: Actualizar el overlay con las detecciones
-            if (!detections.empty()) {
-                m_overlay->UpdateCensorRegions(detections);
-                LOG_DEBUG("Detectados {} objetos para censurar", detections.size());
-            } else {
-                m_overlay->ClearCensorRegions();
+            // Paso 2b: Offset de coordenadas al escritorio virtual
+            for (auto& det : detections) {
+                det.box.x += static_cast<float>(frame.originX);
+                det.box.y += static_cast<float>(frame.originY);
             }
+
+            allDetections.insert(allDetections.end(),
+                std::make_move_iterator(detections.begin()),
+                std::make_move_iterator(detections.end()));
+        }
+
+        // Paso 3: Actualizar el overlay con todas las detecciones
+        if (!allDetections.empty()) {
+            m_overlay->UpdateCensorRegions(allDetections);
+            LOG_DEBUG("Detectados {} objetos para censurar en {} monitores",
+                      allDetections.size(), frames.size());
+        } else {
+            m_overlay->ClearCensorRegions();
         }
 
         // Dormir el tiempo restante del intervalo

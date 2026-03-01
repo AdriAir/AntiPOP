@@ -152,12 +152,33 @@ std::vector<Detection> OnnxDetector::Detect(
         auto outputInfo = outputTensors[0].GetTensorTypeAndShapeInfo();
         auto outputShape = outputInfo.GetShape();
 
+        // Log de diagnostico del output shape (solo la primera vez)
+        static bool shapeLogged = false;
+        if (!shapeLogged) {
+            std::string shapeStr;
+            for (auto dim : outputShape) {
+                if (!shapeStr.empty()) shapeStr += "x";
+                shapeStr += std::to_string(dim);
+            }
+            LOG_INFO("Output del modelo: [{}] (esperado: [1, {}, 8400])",
+                     shapeStr, m_classNames.size() + 4);
+            shapeLogged = true;
+        }
+
         // YOLOv8 output: [1, num_classes+4, num_detections]
         // outputShape[2] = numero de detecciones candidatas (tipicamente 8400)
         size_t numDetections = outputShape.back();
 
         auto detections = Postprocess(outputData, numDetections, width, height);
-        return ApplyNMS(detections, m_nmsThreshold);
+        auto result = ApplyNMS(detections, m_nmsThreshold);
+
+        if (!result.empty()) {
+            LOG_DEBUG("Detecciones: {} pre-NMS, {} post-NMS (mejor: {:.2f}% {})",
+                      detections.size(), result.size(),
+                      result[0].confidence * 100.0f, result[0].className);
+        }
+
+        return result;
 
     } catch (const Ort::Exception& e) {
         LOG_ERROR("Error durante inferencia ONNX: {}", e.what());

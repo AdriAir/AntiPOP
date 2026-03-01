@@ -1,0 +1,21 @@
+# Dependencias de entrenamiento AntiPop
+#
+# IMPORTANTE: PyTorch NO esta aqui intencionadamente.
+# Se instala por separado segun la GPU, para no pisar el build especifico:
+#
+#   GPUs Blackwell (RTX 5000, sm_120+) -> nightly cu128:
+#     pip install --pre torch torchvision torchaudio \
+#         --index-url https://download.pytorch.org/whl/nightly/cu128
+#
+#   Otras GPUs NVIDIA -> estable cu124:
+#     pip install torch torchvision torchaudio \
+#         --index-url https://download.pytorch.org/whl/cu124
+#
+#   Sin GPU:
+#     pip install torch torchvision torchaudio
+#
+# Ejecuta setup.bat para que lo haga automaticamente segun tu hardware.
+
+ultralytics>=8.3.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
