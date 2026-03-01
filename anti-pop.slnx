@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="anti-pop.vcxproj" Id="cc780263-6be7-4470-98f6-c4b75a31be59" />
+</Solution>
