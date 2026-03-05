@@ -88,6 +88,9 @@
     <ClInclude Include="src\utils\Logger.h">
       <Filter>Header Files\utils</Filter>
     </ClInclude>
+    <ClInclude Include="src\detector\DetectionTracker.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <!-- Sources -->
   <ItemGroup>
@@ -112,6 +115,9 @@
     <ClCompile Include="src\config\AutoStart.cpp">
       <Filter>Source Files\config</Filter>
     </ClCompile>
+    <ClCompile Include="src\detector\DetectionTracker.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <!-- Resources -->
   <ItemGroup>
@@ -126,5 +132,15 @@
     <Image Include="anti-pop.ico">
       <Filter>Resource Files</Filter>
     </Image>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\..\runtimes\win-x64\native\onnxruntime.dll" />
+    <None Include="$(MSBuildThisFileDirectory)..\..\runtimes\win-x64\native\onnxruntime_providers_shared.dll" />
+    <None Include="packages.config" />
+  </ItemGroup>
+  <ItemGroup>
+    <CudaCompile Include="src\detector\GpuPreprocess.cu">
+      <Filter>Source Files</Filter>
+    </CudaCompile>
   </ItemGroup>
 </Project>

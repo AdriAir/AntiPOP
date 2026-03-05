@@ -1,6 +1,8 @@
 // Config.h : Configuracion de la aplicacion.
-// Lee y escribe un archivo JSON simple con los parametros ajustables.
+// Lee y escribe un archivo key=value con los parametros ajustables.
 // El archivo se almacena junto al ejecutable.
+//
+// v2: Nuevos parametros de rendimiento para pipeline paralelo y GPU inference
 
 #pragma once
 
@@ -16,8 +18,9 @@ struct AppConfig {
     float confidenceThreshold = 0.5f;
 
     // Intervalo entre capturas de pantalla (milisegundos).
-    // Valores mas bajos = mas fluido pero mas uso de CPU/GPU.
-    uint32_t captureIntervalMs = 100;  // ~10 FPS
+    // En modo pipeline paralelo, esto controla el rate del thread de captura.
+    // Valor 0 = tan rapido como DXGI permita (~120 Hz maximo)
+    uint32_t captureIntervalMs = 0;  // v2: 0 por defecto (max speed)
 
     // Margen extra alrededor de las detecciones (porcentaje, 0.3 = 30%)
     float censorExpansion = 0.30f;
@@ -26,7 +29,6 @@ struct AppConfig {
     int censorType = 1;
 
     // Tamano del bloque de pixelado en pixels (solo si censorType=1)
-    // Valores recomendados: 8, 12, 16 (mas alto = menos detalle visible)
     int pixelateBlockSize = 12;
 
     // Color de la censura (formato RGB) - solo para censorType=0
@@ -39,26 +41,32 @@ struct AppConfig {
 
     // Mostrar icono en la bandeja del sistema
     bool showTrayIcon = true;
+
+    // ---- Nuevos parametros de rendimiento (v2) ----
+
+    // Usar GPU para inferencia (CUDA EP). Si false o no disponible, usa CPU.
+    bool useGpuInference = true;
+
+    // Usar precision FP16 en GPU (mas rapido, misma precision practica).
+    // Solo tiene efecto si useGpuInference=true y el modelo soporta FP16.
+    bool useFP16 = false;
+
+    // FPS objetivo del overlay (tipicamente 60)
+    int overlayTargetFps = 60;
+
+    // Mostrar metricas de rendimiento en el log cada N frames de inferencia
+    int metricsLogInterval = 60;
 };
 
 class Config {
 public:
-    // Carga la configuracion desde el archivo JSON.
-    // Si el archivo no existe, crea uno con valores por defecto.
     [[nodiscard]] bool Load(const std::filesystem::path& configPath);
-
-    // Guarda la configuracion actual al archivo.
     [[nodiscard]] bool Save() const;
 
-    // Acceso a la configuracion actual
     [[nodiscard]] const AppConfig& Get() const noexcept { return m_config; }
     [[nodiscard]] AppConfig& GetMutable() noexcept { return m_config; }
 
-    // Devuelve la ruta del directorio de la aplicacion (donde esta el .exe)
     [[nodiscard]] static std::filesystem::path GetAppDirectory();
-
-    // Devuelve el directorio del proyecto (donde esta la carpeta models/).
-    // Sube desde el directorio del exe hasta encontrarla. Fallback: GetAppDirectory().
     [[nodiscard]] static std::filesystem::path GetProjectDirectory();
 
 private:

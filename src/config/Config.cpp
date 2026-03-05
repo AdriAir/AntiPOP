@@ -1,6 +1,5 @@
 // Config.cpp : Implementacion de la carga/guardado de configuracion.
 // Usa un formato clave=valor simple para evitar dependencias de JSON externas.
-// Se puede reemplazar con nlohmann/json u otro parser en el futuro.
 
 #include "Config.h"
 #include "../utils/Logger.h"
@@ -45,7 +44,6 @@ bool Config::Load(const std::filesystem::path& configPath) {
 
     std::string line;
     while (std::getline(file, line)) {
-        // Ignorar comentarios y lineas vacias
         if (line.empty() || line[0] == '#') continue;
 
         auto eqPos = line.find('=');
@@ -54,7 +52,6 @@ bool Config::Load(const std::filesystem::path& configPath) {
         std::string key   = line.substr(0, eqPos);
         std::string value = line.substr(eqPos + 1);
 
-        // Trim espacios
         auto trim = [](std::string& s) {
             s.erase(0, s.find_first_not_of(" \t\r\n"));
             s.erase(s.find_last_not_of(" \t\r\n") + 1);
@@ -86,6 +83,16 @@ bool Config::Load(const std::filesystem::path& configPath) {
         } else if (key == "show_tray_icon") {
             m_config.showTrayIcon = (value == "true" || value == "1");
         }
+        // Nuevos parametros v2
+        else if (key == "use_gpu_inference") {
+            m_config.useGpuInference = (value == "true" || value == "1");
+        } else if (key == "use_fp16") {
+            m_config.useFP16 = (value == "true" || value == "1");
+        } else if (key == "overlay_target_fps") {
+            m_config.overlayTargetFps = std::stoi(value);
+        } else if (key == "metrics_log_interval") {
+            m_config.metricsLogInterval = std::stoi(value);
+        }
     }
 
     LOG_INFO("Configuracion cargada desde: {}", configPath.string());
@@ -102,13 +109,13 @@ bool Config::Save() const {
     file << "# AntiPop - Configuracion\n";
     file << "# Modifica estos valores y reinicia la aplicacion para aplicar cambios.\n\n";
 
-    file << "# Ruta al modelo ONNX (relativa al directorio del ejecutable)\n";
+    file << "# Ruta al modelo ONNX (relativa al directorio del proyecto)\n";
     file << "model_path = " << m_config.modelPath.string() << "\n\n";
 
     file << "# Umbral de confianza para detecciones (0.0 - 1.0)\n";
     file << "confidence_threshold = " << m_config.confidenceThreshold << "\n\n";
 
-    file << "# Intervalo entre capturas en milisegundos (menor = mas fluido, mas CPU)\n";
+    file << "# Intervalo entre capturas en milisegundos (0 = max speed)\n";
     file << "capture_interval_ms = " << m_config.captureIntervalMs << "\n\n";
 
     file << "# Margen extra alrededor de las detecciones (0.30 = 30%)\n";
@@ -129,7 +136,22 @@ bool Config::Save() const {
     file << "auto_start = " << (m_config.autoStartEnabled ? "true" : "false") << "\n\n";
 
     file << "# Mostrar icono en la bandeja del sistema (true/false)\n";
-    file << "show_tray_icon = " << (m_config.showTrayIcon ? "true" : "false") << "\n";
+    file << "show_tray_icon = " << (m_config.showTrayIcon ? "true" : "false") << "\n\n";
+
+    file << "# === Rendimiento (v2) ===\n\n";
+
+    file << "# Usar GPU para inferencia (true/false). Requiere NVIDIA GPU + CUDA.\n";
+    file << "# Si no esta disponible, cae a CPU automaticamente.\n";
+    file << "use_gpu_inference = " << (m_config.useGpuInference ? "true" : "false") << "\n\n";
+
+    file << "# Usar precision FP16 en GPU (mas rapido, misma precision practica)\n";
+    file << "use_fp16 = " << (m_config.useFP16 ? "true" : "false") << "\n\n";
+
+    file << "# FPS objetivo del overlay (60 recomendado)\n";
+    file << "overlay_target_fps = " << m_config.overlayTargetFps << "\n\n";
+
+    file << "# Mostrar metricas de rendimiento en el log cada N frames\n";
+    file << "metrics_log_interval = " << m_config.metricsLogInterval << "\n";
 
     LOG_INFO("Configuracion guardada en: {}", m_configPath.string());
     return true;

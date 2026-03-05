@@ -2,6 +2,11 @@
 // Usa una ventana WS_EX_LAYERED + WS_EX_TRANSPARENT para ser invisible
 // a la interaccion del usuario, mientras dibuja bloques opacos sobre
 // las areas donde se detectan pulpos.
+//
+// OPTIMIZACIONES v2:
+// - GDI objects cacheados: HDC, HBITMAP y brushes se crean una vez
+// - Repaint() solo limpia y dibuja, sin create/destroy de objects
+// - Ahorro estimado: ~0.5-1ms por frame
 
 #include "OverlayWindow.h"
 #include "../utils/Logger.h"
@@ -14,6 +19,51 @@ namespace antipop::overlay {
 
 OverlayWindow::~OverlayWindow() {
     Shutdown();
+}
+
+void OverlayWindow::InitializeGDICache() {
+    if (!m_hwnd) return;
+
+    RECT clientRect;
+    GetClientRect(m_hwnd, &clientRect);
+    m_cachedWidth  = clientRect.right  - clientRect.left;
+    m_cachedHeight = clientRect.bottom - clientRect.top;
+
+    if (m_cachedWidth <= 0 || m_cachedHeight <= 0) return;
+
+    // Crear memory DC y bitmap persistentes
+    HDC hdcScreen = GetDC(m_hwnd);
+    m_hdcMem = CreateCompatibleDC(hdcScreen);
+    m_hBitmap = CreateCompatibleBitmap(hdcScreen, m_cachedWidth, m_cachedHeight);
+    m_hOldBitmap = static_cast<HBITMAP>(SelectObject(m_hdcMem, m_hBitmap));
+    ReleaseDC(m_hwnd, hdcScreen);
+
+    // Crear brushes persistentes
+    m_transparentBrush = CreateSolidBrush(RGB(0, 0, 0));  // Color key (transparente)
+    m_solidBrush = CreateSolidBrush(RGB(1, 1, 1));        // Casi negro (no es color key)
+
+    // Brushes para los 3 tonos de pixelado
+    m_pixelateBrushes[0] = CreateSolidBrush(RGB(40, 40, 40));
+    m_pixelateBrushes[1] = CreateSolidBrush(RGB(50, 50, 50));
+    m_pixelateBrushes[2] = CreateSolidBrush(RGB(60, 60, 60));
+
+    LOG_INFO("GDI cache inicializado: {}x{}", m_cachedWidth, m_cachedHeight);
+}
+
+void OverlayWindow::ReleaseGDICache() {
+    if (m_hdcMem) {
+        if (m_hOldBitmap) SelectObject(m_hdcMem, m_hOldBitmap);
+        DeleteDC(m_hdcMem);
+        m_hdcMem = nullptr;
+        m_hOldBitmap = nullptr;
+    }
+    if (m_hBitmap) { DeleteObject(m_hBitmap); m_hBitmap = nullptr; }
+    if (m_transparentBrush) { DeleteObject(m_transparentBrush); m_transparentBrush = nullptr; }
+    if (m_solidBrush) { DeleteObject(m_solidBrush); m_solidBrush = nullptr; }
+    for (auto& brush : m_pixelateBrushes) {
+        if (brush) { DeleteObject(brush); brush = nullptr; }
+    }
+    m_cachedWidth = m_cachedHeight = 0;
 }
 
 bool OverlayWindow::Initialize(HINSTANCE hInstance) {
@@ -30,24 +80,18 @@ bool OverlayWindow::Initialize(HINSTANCE hInstance) {
     const int screenW = GetSystemMetrics(SM_CXVIRTUALSCREEN);
     const int screenH = GetSystemMetrics(SM_CYVIRTUALSCREEN);
 
-    // Crear ventana overlay:
-    // - WS_EX_LAYERED: permite transparencia per-pixel
-    // - WS_EX_TRANSPARENT: click-through (los clicks pasan a la ventana de abajo)
-    // - WS_EX_TOPMOST: siempre encima de las demas ventanas
-    // - WS_EX_TOOLWINDOW: no aparece en la barra de tareas ni en Alt+Tab
-    // - WS_EX_NOACTIVATE: no roba el foco al usuario
     m_hwnd = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST |
         WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
         kOverlayClassName,
-        L"",                        // Sin titulo
-        WS_POPUP,                   // Sin bordes ni decoracion
+        L"",
+        WS_POPUP,
         screenX, screenY,
         screenW, screenH,
-        nullptr,                    // Sin ventana padre
-        nullptr,                    // Sin menu
+        nullptr,
+        nullptr,
         hInstance,
-        this                        // Pasar puntero a la instancia
+        this
     );
 
     if (!m_hwnd) {
@@ -55,12 +99,14 @@ bool OverlayWindow::Initialize(HINSTANCE hInstance) {
         return false;
     }
 
-    // Configurar la ventana como completamente transparente inicialmente.
-    // Usamos UpdateLayeredWindow con un bitmap para control per-pixel.
+    // Configurar transparencia por color key
     SetLayeredWindowAttributes(m_hwnd, RGB(0, 0, 0), 0, LWA_COLORKEY);
 
-    // Timer para re-afirmar topmost periodicamente (compatibilidad con juegos)
+    // Timer para re-afirmar topmost periodicamente
     SetTimer(m_hwnd, kTimerReassertTopmost, 2000, nullptr);
+
+    // Inicializar GDI cache DESPUES de crear la ventana
+    InitializeGDICache();
 
     LOG_INFO("Overlay inicializado: {}x{} en ({}, {})", screenW, screenH, screenX, screenY);
     return true;
@@ -73,7 +119,7 @@ bool OverlayWindow::RegisterOverlayClass(HINSTANCE hInstance) {
     wc.lpfnWndProc   = StaticWndProc;
     wc.hInstance     = hInstance;
     wc.hCursor       = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = nullptr;  // Sin fondo (transparente)
+    wc.hbrBackground = nullptr;
     wc.lpszClassName = kOverlayClassName;
 
     return RegisterClassExW(&wc) != 0;
@@ -101,28 +147,30 @@ LRESULT OverlayWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
     switch (msg) {
     case WM_PAINT: {
         PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
+        BeginPaint(hwnd, &ps);
         Repaint();
         EndPaint(hwnd, &ps);
         return 0;
     }
     case WM_ERASEBKGND:
-        return 1;  // No borrar el fondo (evita parpadeo)
+        return 1;
     case WM_TIMER:
         if (wp == kTimerReassertTopmost) {
-            // Re-afirmar posicion topmost (algunas apps/juegos luchan por ser topmost)
             SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                          SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
         return 0;
     case WM_DISPLAYCHANGE:
-        // Cambio de resolucion: reposicionar la ventana
         {
             const int x = GetSystemMetrics(SM_XVIRTUALSCREEN);
             const int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
             const int w = GetSystemMetrics(SM_CXVIRTUALSCREEN);
             const int h = GetSystemMetrics(SM_CYVIRTUALSCREEN);
             SetWindowPos(hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE);
+
+            // Recrear GDI cache con nuevas dimensiones
+            ReleaseGDICache();
+            InitializeGDICache();
         }
         return 0;
     default:
@@ -131,61 +179,52 @@ LRESULT OverlayWindow::HandleMessage(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
 }
 
 void OverlayWindow::Repaint() {
-    if (!m_hwnd) return;
+    if (!m_hwnd || !m_hdcMem) return;
 
-    RECT clientRect;
-    GetClientRect(m_hwnd, &clientRect);
-    const int width  = clientRect.right  - clientRect.left;
-    const int height = clientRect.bottom - clientRect.top;
-
-    // Crear un buffer de doble buffering para evitar parpadeo
-    HDC hdcScreen = GetDC(m_hwnd);
-    HDC hdcMem = CreateCompatibleDC(hdcScreen);
-    HBITMAP hBitmap = CreateCompatibleBitmap(hdcScreen, width, height);
-    HBITMAP hOldBitmap = static_cast<HBITMAP>(SelectObject(hdcMem, hBitmap));
-
-    // Limpiar con color de transparencia (color key)
-    HBRUSH hTransBrush = CreateSolidBrush(RGB(0, 0, 0));
-    FillRect(hdcMem, &clientRect, hTransBrush);
-    DeleteObject(hTransBrush);
+    // Limpiar con color de transparencia (color key = negro puro)
+    RECT fullRect = { 0, 0, m_cachedWidth, m_cachedHeight };
+    FillRect(m_hdcMem, &fullRect, m_transparentBrush);
 
     // Dibujar censura sobre las detecciones
     {
         std::lock_guard lock(m_detectionsMutex);
         if (!m_currentDetections.empty()) {
             if (m_censorType == 0) {
-                // Modo: Rectangulo solido (negro)
-                COLORREF censorColor = (m_censorColor == RGB(0, 0, 0))
-                                       ? RGB(1, 1, 1)
-                                       : m_censorColor;
-                HBRUSH hCensorBrush = CreateSolidBrush(censorColor);
+                // Modo: Rectangulo solido
+                HBRUSH brush = (m_censorColor == RGB(0, 0, 0))
+                               ? m_solidBrush : nullptr;
+                HBRUSH customBrush = nullptr;
 
-                for (const auto& det : m_currentDetections) {
-                    auto expanded = det.box.Expanded(0.1f);
-                    RECT r = expanded.ToRECT();
-
-                    r.left   = std::max(r.left, 0L);
-                    r.top    = std::max(r.top, 0L);
-                    r.right  = std::min(r.right, static_cast<LONG>(width));
-                    r.bottom = std::min(r.bottom, static_cast<LONG>(height));
-
-                    FillRect(hdcMem, &r, hCensorBrush);
+                if (!brush) {
+                    customBrush = CreateSolidBrush(m_censorColor);
+                    brush = customBrush;
                 }
 
-                DeleteObject(hCensorBrush);
-
-            } else if (m_censorType == 1) {
-                // Modo: Pixelado (mosaico) - mas estetico
                 for (const auto& det : m_currentDetections) {
-                    auto expanded = det.box.Expanded(0.1f);
+                    auto expanded = det.box.Expanded(m_censorExpansion);
                     RECT r = expanded.ToRECT();
 
                     r.left   = std::max(r.left, 0L);
                     r.top    = std::max(r.top, 0L);
-                    r.right  = std::min(r.right, static_cast<LONG>(width));
-                    r.bottom = std::min(r.bottom, static_cast<LONG>(height));
+                    r.right  = std::min(r.right, static_cast<LONG>(m_cachedWidth));
+                    r.bottom = std::min(r.bottom, static_cast<LONG>(m_cachedHeight));
 
-                    // Dibujar bloques de pixelado
+                    FillRect(m_hdcMem, &r, brush);
+                }
+
+                if (customBrush) DeleteObject(customBrush);
+
+            } else if (m_censorType == 1) {
+                // Modo: Pixelado (mosaico) - usa brushes cacheados
+                for (const auto& det : m_currentDetections) {
+                    auto expanded = det.box.Expanded(m_censorExpansion);
+                    RECT r = expanded.ToRECT();
+
+                    r.left   = std::max(r.left, 0L);
+                    r.top    = std::max(r.top, 0L);
+                    r.right  = std::min(r.right, static_cast<LONG>(m_cachedWidth));
+                    r.bottom = std::min(r.bottom, static_cast<LONG>(m_cachedHeight));
+
                     const int blockSize = m_pixelateBlockSize;
                     for (LONG by = r.top; by < r.bottom; by += blockSize) {
                         for (LONG bx = r.left; bx < r.right; bx += blockSize) {
@@ -196,16 +235,8 @@ void OverlayWindow::Repaint() {
                                 std::min(by + blockSize, r.bottom)
                             };
 
-                            // Variar el color del bloque para efecto visual
                             int colorVar = ((bx / blockSize) + (by / blockSize)) % 3;
-                            COLORREF blockColor;
-                            if (colorVar == 0) blockColor = RGB(40, 40, 40);
-                            else if (colorVar == 1) blockColor = RGB(50, 50, 50);
-                            else blockColor = RGB(60, 60, 60);
-
-                            HBRUSH hBlockBrush = CreateSolidBrush(blockColor);
-                            FillRect(hdcMem, &blockRect, hBlockBrush);
-                            DeleteObject(hBlockBrush);
+                            FillRect(m_hdcMem, &blockRect, m_pixelateBrushes[colorVar]);
                         }
                     }
                 }
@@ -213,29 +244,14 @@ void OverlayWindow::Repaint() {
         }
     }
 
-    // Actualizar la ventana layered con el bitmap renderizado
-    POINT ptPos  = { clientRect.left, clientRect.top };
-    SIZE  szSize = { width, height };
-    POINT ptSrc  = { 0, 0 };
-
-    BLENDFUNCTION blend = {};
-    blend.BlendOp             = AC_SRC_OVER;
-    blend.SourceConstantAlpha = 255;
-    blend.AlphaFormat         = 0;
-
-    // Actualizar con color key: el negro puro (0,0,0) sera transparente
-    SetLayeredWindowAttributes(m_hwnd, RGB(0, 0, 0), 0, LWA_COLORKEY);
-
-    // Copiar el buffer al DC de la ventana
+    // Copiar el buffer al DC de la ventana (ya tiene color key configurado)
     HDC hdcWindow = GetDC(m_hwnd);
-    BitBlt(hdcWindow, 0, 0, width, height, hdcMem, 0, 0, SRCCOPY);
+    BitBlt(hdcWindow, 0, 0, m_cachedWidth, m_cachedHeight, m_hdcMem, 0, 0, SRCCOPY);
     ReleaseDC(m_hwnd, hdcWindow);
+}
 
-    // Limpiar
-    SelectObject(hdcMem, hOldBitmap);
-    DeleteObject(hBitmap);
-    DeleteDC(hdcMem);
-    ReleaseDC(m_hwnd, hdcScreen);
+void OverlayWindow::RequestRepaint() {
+    Repaint();
 }
 
 void OverlayWindow::UpdateCensorRegions(const std::vector<detector::Detection>& detections) {
@@ -244,7 +260,6 @@ void OverlayWindow::UpdateCensorRegions(const std::vector<detector::Detection>& 
         m_currentDetections = detections;
     }
 
-    // Forzar un repintado
     if (m_hwnd) {
         InvalidateRect(m_hwnd, nullptr, TRUE);
         Repaint();
@@ -270,6 +285,8 @@ void OverlayWindow::SetVisible(bool visible) {
 }
 
 void OverlayWindow::Shutdown() {
+    ReleaseGDICache();
+
     if (m_hwnd) {
         KillTimer(m_hwnd, kTimerReassertTopmost);
         DestroyWindow(m_hwnd);

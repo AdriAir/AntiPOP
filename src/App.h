@@ -1,7 +1,14 @@
 // App.h : Orquestador principal de la aplicacion AntiPop.
-// Coordina los modulos de captura, deteccion y overlay en un pipeline
-// que se ejecuta en un hilo dedicado, mientras el hilo principal
-// maneja el message loop de Windows y la bandeja del sistema.
+//
+// ARQUITECTURA v2 - Pipeline paralelo de 3 threads:
+//
+//   Thread 1 (Captura):    DXGI Desktop Duplication, captura continua
+//   Thread 2 (Inferencia): ONNX Runtime (CPU/GPU), tracking, publica detecciones
+//   Thread 3 (Overlay):    Repinta a 60 FPS fijo usando ultimas detecciones
+//
+// El hilo principal maneja el message loop de Windows y la bandeja del sistema.
+// Los 3 threads del pipeline son independientes y se comunican via
+// PipelineState (lock-free donde es posible).
 
 #pragma once
 
@@ -10,7 +17,9 @@
 #include "detector/IContentDetector.h"
 #include "detector/DetectionTracker.h"
 #include "overlay/IOverlay.h"
+#include "overlay/OverlayWindow.h"
 #include "config/Config.h"
+#include "pipeline/PipelineState.h"
 
 namespace antipop {
 
@@ -23,64 +32,60 @@ public:
     App& operator=(const App&) = delete;
 
     // Inicializa todos los subsistemas.
-    // hInstance: handle de la aplicacion Win32.
-    // silentMode: si es true, no muestra ventanas al inicio (modo auto-start).
     [[nodiscard]] bool Initialize(HINSTANCE hInstance, bool silentMode);
 
-    // Inicia el pipeline de captura+deteccion+censura en un hilo separado.
+    // Inicia el pipeline de 3 threads.
     void Start();
 
-    // Detiene el pipeline y libera recursos.
+    // Detiene todos los threads y libera recursos.
     void Stop();
 
-    // Devuelve true si el pipeline esta activo.
-    [[nodiscard]] bool IsRunning() const noexcept { return m_running.load(); }
+    [[nodiscard]] bool IsRunning() const noexcept { return m_state.running.load(); }
 
-    // Acceso a la configuracion
-    [[nodiscard]] const config::AppConfig& GetConfig() const noexcept { return m_config.Get(); }
+    const config::AppConfig& GetConfig() const noexcept { return m_config.Get(); }
 
-    // Configura el icono de la bandeja del sistema.
+    // Bandeja del sistema
     bool SetupTrayIcon(HWND hwnd);
     void RemoveTrayIcon();
-
-    // Maneja los mensajes del icono de la bandeja.
     void HandleTrayMessage(HWND hwnd, WPARAM wParam, LPARAM lParam);
 
 private:
-    // Bucle principal del pipeline ejecutado en hilo separado.
-    void PipelineLoop();
+    // ---- Threads del pipeline ----
+    void CaptureThread();
+    void InferenceThread();
+    void OverlayThread();
 
-    // Subsistemas
+    // ---- Subsistemas ----
     std::unique_ptr<capture::IScreenCapture>   m_capture;
     std::unique_ptr<detector::IContentDetector> m_detector;
     std::unique_ptr<overlay::IOverlay>          m_overlay;
 
-    // Configuracion
+    // Puntero tipado al overlay concreto (para acceso a metodos especificos)
+    overlay::OverlayWindow* m_overlayWindow = nullptr;
+
     config::Config m_config;
 
-    // Control del hilo del pipeline
-    std::thread   m_pipelineThread;
-    std::atomic<bool> m_running{ false };
+    // ---- Pipeline state (compartido entre threads) ----
+    pipeline::PipelineState m_state;
 
-    // Rastreador de detecciones para suavizacion entre frames
-    // Permite interpolacion suave y elimina salteos cuando los objetos se mueven
+    // ---- Threads ----
+    std::thread m_captureThread;
+    std::thread m_inferenceThread;
+    std::thread m_overlayThread;
+
+    // Rastreador de detecciones (usado solo por InferenceThread)
     detector::DetectionTracker m_tracker;
 
     // Temporal smoothing para evitar parpadeos de censura
-    // Mantiene las detecciones previas durante N frames si no hay nuevas detecciones
     int m_framesWithoutDetection = 0;
-    static constexpr int kFramesToClearCensor = 12;  // Buffer temporal: 12 frames (~1200ms)
+    static constexpr int kFramesToClearCensor = 12;
 
-    // Bandeja del sistema
+    // ---- Bandeja del sistema ----
     NOTIFYICONDATAW m_trayIconData = {};
     bool            m_trayIconActive = false;
-
     HINSTANCE m_hInstance = nullptr;
 
-    // Mensaje personalizado para la bandeja del sistema
     static constexpr UINT WM_TRAYICON = WM_USER + 1;
-
-    // IDs del menu contextual de la bandeja
     static constexpr UINT ID_TRAY_EXIT    = 1001;
     static constexpr UINT ID_TRAY_TOGGLE  = 1002;
     static constexpr UINT ID_TRAY_ABOUT   = 1003;

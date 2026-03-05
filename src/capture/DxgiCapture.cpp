@@ -1,5 +1,10 @@
 // DxgiCapture.cpp : Implementacion de la captura de pantalla via DXGI Desktop Duplication API.
 // Soporta multiples monitores: enumera todos los outputs y crea una duplicacion por cada uno.
+//
+// OPTIMIZACIONES v2:
+// - Modo GPU: textura compartida GPU-only para zero-copy (sin staging ni memcpy)
+// - AcquireNextFrame con timeout 0 para non-blocking capture
+// - Staging texture solo se crea/usa en modo CPU (fallback)
 
 #include "DxgiCapture.h"
 #include "../utils/Logger.h"
@@ -26,27 +31,36 @@ bool DxgiCapture::Initialize() {
         return false;
     }
 
+    // Crear textura compartida para modo GPU zero-copy
+    InitializeSharedTexture();
+
     m_initialized = true;
     LOG_INFO("DXGI Capture inicializado con {} monitor(es)", m_monitors.size());
     return true;
 }
 
 bool DxgiCapture::InitializeD3D() {
-    D3D_FEATURE_LEVEL featureLevel;
-    UINT flags = 0;
+    UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;  // Necesario para interop DXGI
 #ifdef _DEBUG
     flags |= D3D11_CREATE_DEVICE_DEBUG;
 #endif
 
+    // Especificar feature level para mejor rendimiento
+    D3D_FEATURE_LEVEL requestedLevels[] = {
+        D3D_FEATURE_LEVEL_11_1,
+        D3D_FEATURE_LEVEL_11_0
+    };
+    D3D_FEATURE_LEVEL obtainedLevel;
+
     HRESULT hr = D3D11CreateDevice(
-        nullptr,                    // Adaptador por defecto
+        nullptr,
         D3D_DRIVER_TYPE_HARDWARE,
         nullptr,
         flags,
-        nullptr, 0,                 // Feature levels por defecto
+        requestedLevels, _countof(requestedLevels),
         D3D11_SDK_VERSION,
         &m_device,
-        &featureLevel,
+        &obtainedLevel,
         &m_context
     );
 
@@ -55,11 +69,12 @@ bool DxgiCapture::InitializeD3D() {
         return false;
     }
 
+    LOG_INFO("D3D11 inicializado (feature level: {:#x})",
+             static_cast<unsigned>(obtainedLevel));
     return true;
 }
 
 bool DxgiCapture::InitializeDuplication() {
-    // Obtener el adaptador DXGI desde el dispositivo D3D11
     Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
     HRESULT hr = m_device.As(&dxgiDevice);
     if (FAILED(hr)) return false;
@@ -68,10 +83,8 @@ bool DxgiCapture::InitializeDuplication() {
     hr = dxgiDevice->GetAdapter(&adapter);
     if (FAILED(hr)) return false;
 
-    // Enumerar TODOS los monitores conectados
     Microsoft::WRL::ComPtr<IDXGIOutput> output;
     for (UINT i = 0; adapter->EnumOutputs(i, &output) != DXGI_ERROR_NOT_FOUND; ++i) {
-        // Necesitamos IDXGIOutput1 para Desktop Duplication
         Microsoft::WRL::ComPtr<IDXGIOutput1> output1;
         hr = output.As(&output1);
         if (FAILED(hr)) {
@@ -79,7 +92,6 @@ bool DxgiCapture::InitializeDuplication() {
             continue;
         }
 
-        // Obtener las dimensiones y posicion del monitor
         DXGI_OUTPUT_DESC desc;
         output->GetDesc(&desc);
 
@@ -89,7 +101,6 @@ bool DxgiCapture::InitializeDuplication() {
         mon.originX = desc.DesktopCoordinates.left;
         mon.originY = desc.DesktopCoordinates.top;
 
-        // Crear la duplicacion del escritorio para este monitor
         hr = output1->DuplicateOutput(m_device.Get(), &mon.duplication);
         if (FAILED(hr)) {
             LOG_WARN("No se pudo duplicar monitor {}: 0x{:08X}", i, static_cast<unsigned>(hr));
@@ -97,7 +108,7 @@ bool DxgiCapture::InitializeDuplication() {
             continue;
         }
 
-        // Crear textura de staging para leer pixels de la GPU a CPU
+        // Staging texture para modo CPU (fallback cuando no hay CUDA)
         D3D11_TEXTURE2D_DESC stagingDesc = {};
         stagingDesc.Width            = mon.width;
         stagingDesc.Height           = mon.height;
@@ -130,17 +141,81 @@ bool DxgiCapture::InitializeDuplication() {
     return true;
 }
 
+void DxgiCapture::InitializeSharedTexture() {
+    if (m_monitors.empty()) return;
+
+    // Crear textura GPU-only compartida para modo zero-copy.
+    // Dimensiones del primer monitor (el pipeline GPU procesa un monitor a la vez).
+    const auto& mon = m_monitors[0];
+
+    D3D11_TEXTURE2D_DESC desc = {};
+    desc.Width            = mon.width;
+    desc.Height           = mon.height;
+    desc.MipLevels        = 1;
+    desc.ArraySize        = 1;
+    desc.Format           = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage            = D3D11_USAGE_DEFAULT;  // GPU-only (sin CPU access)
+    desc.BindFlags        = D3D11_BIND_SHADER_RESOURCE;
+    desc.MiscFlags        = D3D11_RESOURCE_MISC_SHARED;  // Para CUDA interop
+
+    HRESULT hr = m_device->CreateTexture2D(&desc, nullptr, &m_sharedTexture);
+    if (FAILED(hr)) {
+        LOG_WARN("No se pudo crear shared texture para GPU mode: 0x{:08X}",
+                 static_cast<unsigned>(hr));
+        // No es fatal: el modo CPU sigue funcionando
+    } else {
+        LOG_INFO("Shared texture GPU creada: {}x{} (zero-copy mode disponible)",
+                 mon.width, mon.height);
+    }
+}
+
+bool DxgiCapture::CaptureToGpuTexture() {
+    if (!m_initialized || m_monitors.empty() || !m_sharedTexture) return false;
+
+    auto& mon = m_monitors[0];  // Monitor primario
+
+    DXGI_OUTDUPL_FRAME_INFO frameInfo;
+    Microsoft::WRL::ComPtr<IDXGIResource> desktopResource;
+
+    // Timeout 0: non-blocking, devuelve inmediatamente si no hay frame nuevo
+    HRESULT hr = mon.duplication->AcquireNextFrame(0, &frameInfo, &desktopResource);
+
+    if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
+        return false;  // No hay frame nuevo
+    }
+
+    if (FAILED(hr)) {
+        if (hr == DXGI_ERROR_ACCESS_LOST) {
+            LOG_WARN("Desktop Duplication perdido, reinicializando...");
+            Shutdown();
+            (void)Initialize();
+        }
+        return false;
+    }
+
+    // Copiar GPU->GPU (rapidisimo, ~0.1ms)
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> desktopTexture;
+    hr = desktopResource.As(&desktopTexture);
+    if (SUCCEEDED(hr)) {
+        m_context->CopyResource(m_sharedTexture.Get(), desktopTexture.Get());
+    }
+
+    mon.duplication->ReleaseFrame();
+    return SUCCEEDED(hr);
+}
+
 CapturedFrame DxgiCapture::CaptureMonitor(MonitorCapture& mon) {
     CapturedFrame frame;
 
     DXGI_OUTDUPL_FRAME_INFO frameInfo;
     Microsoft::WRL::ComPtr<IDXGIResource> desktopResource;
 
-    // Intentar adquirir el siguiente frame (timeout de 50ms por monitor)
-    HRESULT hr = mon.duplication->AcquireNextFrame(50, &frameInfo, &desktopResource);
+    // Timeout reducido a 16ms (un frame a 60 FPS) en vez de 50ms
+    HRESULT hr = mon.duplication->AcquireNextFrame(16, &frameInfo, &desktopResource);
 
     if (hr == DXGI_ERROR_WAIT_TIMEOUT) {
-        return frame;  // No hay frame nuevo, devolver frame vacio (IsValid() = false)
+        return frame;
     }
 
     if (FAILED(hr)) {
@@ -155,7 +230,6 @@ CapturedFrame DxgiCapture::CaptureMonitor(MonitorCapture& mon) {
         return frame;
     }
 
-    // Obtener la textura del frame capturado
     Microsoft::WRL::ComPtr<ID3D11Texture2D> desktopTexture;
     hr = desktopResource.As(&desktopTexture);
     if (FAILED(hr)) {
@@ -163,10 +237,9 @@ CapturedFrame DxgiCapture::CaptureMonitor(MonitorCapture& mon) {
         return frame;
     }
 
-    // Copiar la textura del escritorio a nuestra textura de staging
+    // Copiar a staging texture para lectura CPU
     m_context->CopyResource(mon.stagingTexture.Get(), desktopTexture.Get());
 
-    // Mapear la textura de staging para leer los pixels en CPU
     D3D11_MAPPED_SUBRESOURCE mapped;
     hr = m_context->Map(mon.stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped);
     if (FAILED(hr)) {
@@ -174,7 +247,6 @@ CapturedFrame DxgiCapture::CaptureMonitor(MonitorCapture& mon) {
         return frame;
     }
 
-    // Construir el frame capturado
     frame.width   = mon.width;
     frame.height  = mon.height;
     frame.stride  = mon.width * 4;
@@ -182,7 +254,6 @@ CapturedFrame DxgiCapture::CaptureMonitor(MonitorCapture& mon) {
     frame.originY = mon.originY;
     frame.data.resize(static_cast<size_t>(frame.stride) * frame.height);
 
-    // Copiar fila por fila (el stride de la GPU puede diferir)
     const auto* src = static_cast<const uint8_t*>(mapped.pData);
     for (uint32_t y = 0; y < mon.height; ++y) {
         std::memcpy(
@@ -215,6 +286,7 @@ std::vector<CapturedFrame> DxgiCapture::CaptureAllFrames() {
 }
 
 void DxgiCapture::Shutdown() {
+    m_sharedTexture.Reset();
     m_monitors.clear();
     m_context.Reset();
     m_device.Reset();

@@ -9,6 +9,9 @@
 #include "src/App.h"
 #include "src/utils/Logger.h"
 #include "src/config/Config.h"
+#include <timeapi.h>
+
+#pragma comment(lib, "winmm.lib")  // Para timeBeginPeriod/timeEndPeriod
 
 // Instancia global de la aplicacion
 static std::unique_ptr<antipop::App> g_app;
@@ -45,7 +48,14 @@ int APIENTRY wWinMain(
     }
 
     // ========================================================================
-    // 2. Inicializar el logger
+    // 2. Configurar resolucion de timer a 1ms (critico para 60 FPS)
+    // ========================================================================
+    // Sin esto, Sleep() y timers tienen resolucion de ~15.6ms (inaceptable para 60 FPS).
+    // Con timeBeginPeriod(1), la resolucion baja a ~1ms.
+    timeBeginPeriod(1);
+
+    // ========================================================================
+    // 3. Inicializar el logger
     // ========================================================================
     auto logPath = antipop::config::Config::GetAppDirectory() / "antipop.log";
 #ifdef _DEBUG
@@ -56,7 +66,7 @@ int APIENTRY wWinMain(
     LOG_INFO("=== AntiPop iniciando ===");
 
     // ========================================================================
-    // 3. Detectar si se inicio en modo silencioso (auto-start con Windows)
+    // 4. Detectar si se inicio en modo silencioso (auto-start con Windows)
     // ========================================================================
     bool silentMode = false;
     if (lpCmdLine) {
@@ -65,7 +75,7 @@ int APIENTRY wWinMain(
     }
 
     // ========================================================================
-    // 4. Crear la ventana oculta (necesaria para recibir mensajes del tray)
+    // 5. Crear la ventana oculta (necesaria para recibir mensajes del tray)
     // ========================================================================
     if (!RegisterHiddenWindowClass(hInstance)) {
         LOG_ERROR("No se pudo registrar la clase de ventana oculta");
@@ -87,7 +97,7 @@ int APIENTRY wWinMain(
     }
 
     // ========================================================================
-    // 5. Inicializar la aplicacion
+    // 6. Inicializar la aplicacion
     // ========================================================================
     g_app = std::make_unique<antipop::App>();
     if (!g_app->Initialize(hInstance, silentMode)) {
@@ -98,20 +108,20 @@ int APIENTRY wWinMain(
     }
 
     // ========================================================================
-    // 6. Configurar el icono de la bandeja del sistema
+    // 7. Configurar el icono de la bandeja del sistema
     // ========================================================================
     if (g_app->GetConfig().showTrayIcon) {
         g_app->SetupTrayIcon(hwndHidden);
     }
 
     // ========================================================================
-    // 7. Iniciar el pipeline de censura
+    // 8. Iniciar el pipeline de censura
     // ========================================================================
     g_app->Start();
     LOG_INFO("AntiPop ejecutandose");
 
     // ========================================================================
-    // 8. Message loop principal
+    // 9. Message loop principal
     // ========================================================================
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0)) {
@@ -120,7 +130,7 @@ int APIENTRY wWinMain(
     }
 
     // ========================================================================
-    // 9. Limpieza
+    // 10. Limpieza
     // ========================================================================
     g_app->Stop();
     g_app->RemoveTrayIcon();
@@ -128,6 +138,9 @@ int APIENTRY wWinMain(
 
     LOG_INFO("=== AntiPop finalizado ===");
     antipop::utils::Logger::Instance().Shutdown();
+
+    // Restaurar resolucion de timer por defecto
+    timeEndPeriod(1);
 
     if (hMutex) CloseHandle(hMutex);
     return static_cast<int>(msg.wParam);

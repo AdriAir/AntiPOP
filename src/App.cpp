@@ -1,14 +1,23 @@
 // App.cpp : Implementacion del orquestador principal.
-// Pipeline: Captura -> Deteccion IA -> Actualizacion Overlay.
-// Se ejecuta en un hilo dedicado con intervalo configurable.
+//
+// ARQUITECTURA v2 - Pipeline paralelo de 3 threads:
+//
+//   CaptureThread():    Captura DXGI continua, publica frames
+//   InferenceThread():  Lee frames, ejecuta ONNX + tracking, publica detecciones
+//   OverlayThread():    Lee detecciones, repinta a 60 FPS fijo
+//
+// Frame skipping implicito: si la inferencia tarda mas que un ciclo de captura,
+// el thread de inferencia salta al frame mas reciente automaticamente.
+// El overlay repinta las ultimas detecciones conocidas a 60 FPS constante.
 
 #include "App.h"
 #include "capture/DxgiCapture.h"
 #include "detector/OnnxDetector.h"
-#include "overlay/OverlayWindow.h"
 #include "config/AutoStart.h"
 #include "utils/Logger.h"
 #include "../Resource.h"
+
+#include <intrin.h>  // Para _mm_pause()
 
 namespace antipop {
 
@@ -46,12 +55,13 @@ bool App::Initialize(HINSTANCE hInstance, bool silentMode) {
         return false;
     }
 
-    // 4. Inicializar detector de IA (ONNX Runtime)
-    m_detector = std::make_unique<detector::OnnxDetector>();
+    // 4. Inicializar detector de IA (ONNX Runtime con CUDA EP si disponible)
+    auto onnxDetector = std::make_unique<detector::OnnxDetector>();
+    onnxDetector->SetUseGpu(cfg.useGpuInference);
+    onnxDetector->SetUseFP16(cfg.useFP16);
+    m_detector = std::move(onnxDetector);
     auto modelPath = config::Config::GetProjectDirectory() / cfg.modelPath;
     if (!m_detector->Initialize(modelPath)) {
-        // No es un error fatal: la app puede funcionar sin modelo
-        // (util durante desarrollo antes de tener el modelo entrenado)
         LOG_WARN("Detector de IA no disponible. "
                  "Coloca el modelo ONNX en: {}", modelPath.string());
     }
@@ -64,15 +74,15 @@ bool App::Initialize(HINSTANCE hInstance, bool silentMode) {
         return false;
     }
 
-    // Configurar color y estilo de censura
-    auto* overlayWin = dynamic_cast<overlay::OverlayWindow*>(m_overlay.get());
-    if (overlayWin) {
-        overlayWin->SetCensorColor(RGB(cfg.censorColorR, cfg.censorColorG, cfg.censorColorB));
-        overlayWin->SetCensorStyle(cfg.censorType, cfg.pixelateBlockSize);
+    // Guardar puntero tipado para acceso a metodos especificos
+    m_overlayWindow = dynamic_cast<overlay::OverlayWindow*>(m_overlay.get());
+    if (m_overlayWindow) {
+        m_overlayWindow->SetCensorColor(RGB(cfg.censorColorR, cfg.censorColorG, cfg.censorColorB));
+        m_overlayWindow->SetCensorStyle(cfg.censorType, cfg.pixelateBlockSize, cfg.censorExpansion);
 
         const char* censorTypeStr = (cfg.censorType == 0) ? "solido" : "pixelado";
-        LOG_INFO("Censura configurada: tipo={}, bloque={}px",
-                 censorTypeStr, cfg.pixelateBlockSize);
+        LOG_INFO("Censura configurada: tipo={}, bloque={}px, expansion={:.0f}%",
+                 censorTypeStr, cfg.pixelateBlockSize, cfg.censorExpansion * 100.0f);
     }
 
     LOG_INFO("AntiPop inicializado correctamente (silentMode={})", silentMode);
@@ -80,25 +90,28 @@ bool App::Initialize(HINSTANCE hInstance, bool silentMode) {
 }
 
 void App::Start() {
-    if (m_running.load()) return;
+    if (m_state.running.load()) return;
 
-    m_running.store(true);
+    m_state.running.store(true);
     m_overlay->SetVisible(true);
 
-    // Lanzar el pipeline en un hilo separado
-    m_pipelineThread = std::thread(&App::PipelineLoop, this);
+    // Lanzar los 3 threads del pipeline
+    m_captureThread   = std::thread(&App::CaptureThread, this);
+    m_inferenceThread = std::thread(&App::InferenceThread, this);
+    m_overlayThread   = std::thread(&App::OverlayThread, this);
 
-    LOG_INFO("Pipeline de censura iniciado");
+    LOG_INFO("Pipeline de censura iniciado (3 threads: captura + inferencia + overlay)");
 }
 
 void App::Stop() {
-    if (!m_running.load()) return;
+    if (!m_state.running.load()) return;
 
-    m_running.store(false);
+    m_state.running.store(false);
 
-    if (m_pipelineThread.joinable()) {
-        m_pipelineThread.join();
-    }
+    // Esperar a que los 3 threads terminen
+    if (m_captureThread.joinable())   m_captureThread.join();
+    if (m_inferenceThread.joinable()) m_inferenceThread.join();
+    if (m_overlayThread.joinable())   m_overlayThread.join();
 
     if (m_overlay) {
         m_overlay->ClearCensorRegions();
@@ -106,37 +119,116 @@ void App::Stop() {
     }
 
     m_tracker.Reset();
+    m_framesWithoutDetection = 0;
 
     LOG_INFO("Pipeline de censura detenido");
 }
 
-void App::PipelineLoop() {
-    const auto& cfg = m_config.Get();
-    const auto interval = std::chrono::milliseconds(cfg.captureIntervalMs);
+// ============================================================================
+// Thread 1: CAPTURA
+// Captura frames DXGI continuamente y los publica para el thread de inferencia.
+// No tiene framerate fijo - corre tan rapido como DXGI permite.
+// ============================================================================
+void App::CaptureThread() {
+    LOG_INFO("[Captura] Thread iniciado");
+    pipeline::PerfTimer timer;
 
-    LOG_INFO("Pipeline loop iniciado con intervalo de {}ms", cfg.captureIntervalMs);
-    LOG_INFO("Rastreo de detecciones activo: interpolacion suave entre frames");
-    LOG_INFO("Buffer temporal: {} frames (~{}ms)",
-             kFramesToClearCensor, kFramesToClearCensor * cfg.captureIntervalMs);
+    while (m_state.running.load(std::memory_order_relaxed)) {
+        timer.Reset();
 
-    while (m_running.load()) {
-        auto frameStart = std::chrono::steady_clock::now();
-
-        // Paso 1: Capturar frames de todos los monitores
         auto frames = m_capture->CaptureAllFrames();
 
+        if (!frames.empty()) {
+            // Publicar frames para el thread de inferencia
+            {
+                std::lock_guard lock(m_state.frameMutex);
+                m_state.latestFrames = std::move(frames);
+            }
+            m_state.captureFrameId.fetch_add(1, std::memory_order_release);
+        }
+
+        double elapsed = timer.ElapsedMs();
+
+        // Si no hubo frame nuevo (AcquireNextFrame devolvio timeout),
+        // dormir brevemente para no quemar CPU
+        if (frames.empty()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        // Si la captura fue rapida, limitar a ~120 Hz para no saturar
+        else if (elapsed < 8.0) {
+            auto remaining = std::chrono::microseconds(8000) -
+                             std::chrono::microseconds(static_cast<int64_t>(elapsed * 1000));
+            if (remaining > std::chrono::microseconds(0)) {
+                std::this_thread::sleep_for(remaining);
+            }
+        }
+    }
+
+    LOG_INFO("[Captura] Thread finalizado");
+}
+
+// ============================================================================
+// Thread 2: INFERENCIA
+// Lee el frame mas reciente, ejecuta preprocesado + ONNX + tracking.
+// Frame skipping implicito: si hay frames acumulados, procesa solo el ultimo.
+// ============================================================================
+void App::InferenceThread() {
+    LOG_INFO("[Inferencia] Thread iniciado");
+
+    const auto& cfg = m_config.Get();
+    const int metricsInterval = std::max(1, cfg.metricsLogInterval);
+
+    uint64_t lastProcessedFrame = 0;
+    pipeline::PerfTimer timer;
+    pipeline::PerfTimer totalTimer;
+
+    // Metricas rolling average
+    double avgInferenceMs = 0.0;
+    int metricsCounter = 0;
+
+    while (m_state.running.load(std::memory_order_relaxed)) {
+        uint64_t currentFrame = m_state.captureFrameId.load(std::memory_order_acquire);
+
+        // No hay frame nuevo - esperar brevemente
+        if (currentFrame <= lastProcessedFrame) {
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
+            continue;
+        }
+
+        totalTimer.Reset();
+
+        // Log de frames saltados
+        uint64_t skipped = currentFrame - lastProcessedFrame - 1;
+        if (skipped > 0) {
+            m_state.metrics.framesSkipped += skipped;
+            LOG_DEBUG("[Inferencia] Saltados {} frames (inferencia mas lenta que captura)", skipped);
+        }
+        lastProcessedFrame = currentFrame;
+
+        // Copiar frames bajo lock (rapido, solo mueve el vector)
+        std::vector<capture::CapturedFrame> frames;
+        {
+            std::lock_guard lock(m_state.frameMutex);
+            frames = std::move(m_state.latestFrames);
+        }
+
+        // Ejecutar deteccion en cada frame
         std::vector<detector::Detection> allDetections;
 
         for (auto& frame : frames) {
-            // Paso 2: Detectar pulpos en cada frame
+            timer.Reset();
             auto detections = m_detector->Detect(
                 frame.data.data(),
                 frame.width,
                 frame.height,
                 frame.stride
             );
+            double inferMs = timer.ElapsedMs();
 
-            // Paso 2b: Offset de coordenadas al escritorio virtual
+            // Actualizar metricas
+            avgInferenceMs = avgInferenceMs * 0.9 + inferMs * 0.1;  // EMA
+
+            // Offset de coordenadas al escritorio virtual
             for (auto& det : detections) {
                 det.box.x += static_cast<float>(frame.originX);
                 det.box.y += static_cast<float>(frame.originY);
@@ -147,41 +239,116 @@ void App::PipelineLoop() {
                 std::make_move_iterator(detections.end()));
         }
 
-        // Paso 3: Rastrear detecciones entre frames para interpolacion suave
-        // El tracker mantiene un historial y suaviza el movimiento de los cuadros
-        // de censura, eliminando salteos cuando los objetos se mueven
+        // Tracking: suavizar detecciones entre frames
         auto trackedDetections = m_tracker.UpdateAndGetTrackedDetections(
-            allDetections,
-            kFramesToClearCensor  // Frames para mantener objeto sin detectar
-        );
+            allDetections, kFramesToClearCensor);
 
-        // Paso 4: Actualizar el overlay con las detecciones rastreadas
+        // Actualizar lógica de limpieza
         if (!trackedDetections.empty()) {
             m_framesWithoutDetection = 0;
-            m_overlay->UpdateCensorRegions(trackedDetections);
-            if (!allDetections.empty()) {
-                LOG_DEBUG("Detectados {} objetos, rastreando {} (suavizados)",
-                          allDetections.size(), trackedDetections.size());
-            }
         } else {
-            // Sin detecciones rastreadas
             m_framesWithoutDetection++;
-
-            // Solo limpiar despues de muchos frames sin detecciones
             if (m_framesWithoutDetection >= kFramesToClearCensor) {
-                m_overlay->ClearCensorRegions();
-                m_tracker.Reset();  // Resetear el rastreador cuando se limpia
+                m_tracker.Reset();
             }
         }
 
-        // Dormir el tiempo restante del intervalo
-        auto elapsed = std::chrono::steady_clock::now() - frameStart;
-        if (elapsed < interval) {
-            std::this_thread::sleep_for(interval - elapsed);
+        // Publicar detecciones en el double buffer (lock-free)
+        int writeSlot = 1 - m_state.activeSlot.load(std::memory_order_relaxed);
+        m_state.slots[writeSlot].detections = std::move(trackedDetections);
+        m_state.slots[writeSlot].frameId = currentFrame;
+        m_state.slots[writeSlot].timestamp = std::chrono::steady_clock::now();
+
+        // Swap atomico: el overlay ahora lee el nuevo slot
+        m_state.activeSlot.store(writeSlot, std::memory_order_release);
+
+        // Actualizar metricas periodicamente
+        double totalMs = totalTimer.ElapsedMs();
+        metricsCounter++;
+        if (metricsCounter % metricsInterval == 0) {
+            m_state.metrics.inferenceMs = avgInferenceMs;
+            m_state.metrics.totalMs = totalMs;
+            m_state.metrics.fps = (totalMs > 0) ? 1000.0 / totalMs : 0.0;
+            m_state.metricsUpdated.store(true, std::memory_order_relaxed);
+
+            LOG_INFO("[Inferencia] Avg: {:.1f}ms ({:.0f} FPS), Skipped: {}",
+                     avgInferenceMs, m_state.metrics.fps,
+                     m_state.metrics.framesSkipped);
         }
     }
+
+    LOG_INFO("[Inferencia] Thread finalizado");
 }
 
+// ============================================================================
+// Thread 3: OVERLAY
+// Repinta a 60 FPS fijo usando las ultimas detecciones disponibles.
+// Completamente independiente del ritmo de inferencia.
+// Usa spin-wait preciso para los ultimos ~1ms (garantiza 60 FPS estable).
+// ============================================================================
+void App::OverlayThread() {
+    const auto& cfg = m_config.Get();
+    const int targetFps = std::clamp(cfg.overlayTargetFps, 1, 240);
+    const auto frameTime = std::chrono::microseconds(1000000 / targetFps);
+
+    LOG_INFO("[Overlay] Thread iniciado ({} FPS, {:.1f}ms/frame)",
+             targetFps, 1000.0 / targetFps);
+
+    using clock = std::chrono::steady_clock;
+
+    uint64_t lastSeenFrameId = 0;
+    int framesWithoutNewDetections = 0;
+
+    while (m_state.running.load(std::memory_order_relaxed)) {
+        auto frameStart = clock::now();
+
+        // Leer slot activo (lock-free, sin contention)
+        int readSlot = m_state.activeSlot.load(std::memory_order_acquire);
+        auto& slot = m_state.slots[readSlot];
+
+        bool hasNewData = (slot.frameId > lastSeenFrameId);
+        if (hasNewData) {
+            lastSeenFrameId = slot.frameId;
+            framesWithoutNewDetections = 0;
+        } else {
+            framesWithoutNewDetections++;
+        }
+
+        // Actualizar overlay
+        if (!slot.detections.empty()) {
+            m_overlay->UpdateCensorRegions(slot.detections);
+        } else {
+            // Verificar si debemos limpiar (usando edad del ultimo resultado)
+            auto age = clock::now() - slot.timestamp;
+            if (age > std::chrono::milliseconds(kFramesToClearCensor * 100)) {
+                m_overlay->ClearCensorRegions();
+            } else if (m_overlayWindow) {
+                // Solo repintar (sin cambiar detecciones)
+                m_overlayWindow->RequestRepaint();
+            }
+        }
+
+        // Sleep preciso para 60 FPS
+        auto elapsed = clock::now() - frameStart;
+        auto remaining = frameTime - elapsed;
+
+        if (remaining > std::chrono::milliseconds(2)) {
+            // Sleep grueso (cede CPU al OS)
+            std::this_thread::sleep_for(remaining - std::chrono::milliseconds(1));
+        }
+
+        // Spin-wait preciso para los ultimos ~1ms
+        while (clock::now() - frameStart < frameTime) {
+            _mm_pause();  // Hint al CPU: estamos en spin-wait
+        }
+    }
+
+    LOG_INFO("[Overlay] Thread finalizado");
+}
+
+// ============================================================================
+// Bandeja del sistema (sin cambios respecto a v1)
+// ============================================================================
 bool App::SetupTrayIcon(HWND hwnd) {
     m_trayIconData = {};
     m_trayIconData.cbSize           = sizeof(NOTIFYICONDATAW);
@@ -212,19 +379,17 @@ void App::RemoveTrayIcon() {
 void App::HandleTrayMessage(HWND hwnd, [[maybe_unused]] WPARAM wParam, LPARAM lParam) {
     switch (LOWORD(lParam)) {
     case WM_RBUTTONUP: {
-        // Mostrar menu contextual
         HMENU hMenu = CreatePopupMenu();
         if (!hMenu) return;
 
         AppendMenuW(hMenu, MF_STRING,
                     ID_TRAY_TOGGLE,
-                    m_running.load() ? L"Pausar censura" : L"Reanudar censura");
+                    m_state.running.load() ? L"Pausar censura" : L"Reanudar censura");
         AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(hMenu, MF_STRING, ID_TRAY_ABOUT, L"Acerca de AntiPop...");
         AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, L"Salir");
 
-        // Necesario para que el menu se cierre al hacer click fuera
         SetForegroundWindow(hwnd);
 
         POINT pt;
@@ -236,8 +401,7 @@ void App::HandleTrayMessage(HWND hwnd, [[maybe_unused]] WPARAM wParam, LPARAM lP
         break;
     }
     case WM_LBUTTONDBLCLK:
-        // Doble click: toggle censura
-        if (m_running.load()) {
+        if (m_state.running.load()) {
             Stop();
             wcscpy_s(m_trayIconData.szTip, L"AntiPop - Censura PAUSADA");
         } else {

@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la /c/Users/Abori/Documents/Work/Repositories/AntiPop/*.cfg)"
+    ]
+  }
+}
