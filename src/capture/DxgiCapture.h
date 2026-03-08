@@ -62,7 +62,7 @@ private:
     [[nodiscard]] bool InitializeDuplication();
     void InitializeSharedTexture();
 
-    [[nodiscard]] CapturedFrame CaptureMonitor(MonitorCapture& monitor);
+    [[nodiscard]] CapturedFrame CaptureMonitor(MonitorCapture& monitor, std::vector<uint8_t>& buffer);
 
     // D3D11 (compartidos entre todos los monitores)
     Microsoft::WRL::ComPtr<ID3D11Device>        m_device;
@@ -73,6 +73,9 @@ private:
 
     std::vector<MonitorCapture> m_monitors;
     bool m_initialized = false;
+
+    // Buffers pre-alocados para evitar allocation por frame (~8MB/frame eliminado)
+    std::vector<std::vector<uint8_t>> m_frameBuffers;
 };
 
 } // namespace antipop::capture

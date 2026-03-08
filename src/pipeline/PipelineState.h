@@ -36,8 +36,11 @@ struct PipelineMetrics {
     double postprocMs   = 0.0;
     double overlayMs    = 0.0;
     double totalMs      = 0.0;
-    double fps          = 0.0;
+    double fps          = 0.0;      // FPS de inferencia
+    double overlayFps   = 0.0;      // FPS real del hilo overlay
     uint64_t framesSkipped = 0;
+    int detectionCount  = 0;        // Detecciones en el ultimo frame
+    bool usingGpu       = false;    // True si CUDA EP esta activo
 };
 
 // Estado compartido entre los 3 threads del pipeline.

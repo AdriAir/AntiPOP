@@ -41,6 +41,19 @@ public:
     // Fuerza un repintado desde fuera (usado por el overlay thread en Fase 2)
     void RequestRepaint();
 
+#ifdef _DEBUG
+    // Informacion de debug que se muestra en pantalla en builds de Debug
+    struct DebugStats {
+        double inferenceFps   = 0.0;
+        double overlayFps     = 0.0;
+        double inferenceMs    = 0.0;
+        int    detectionCount = 0;
+        uint64_t framesSkipped = 0;
+        bool   usingGpu       = false;
+    };
+    void SetDebugStats(const DebugStats& stats);
+#endif
+
 private:
     // Window procedure estatico (reenvía a la instancia)
     static LRESULT CALLBACK StaticWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
@@ -87,6 +100,17 @@ private:
 
     // Timer para re-afirmar la posicion topmost periodicamente
     static constexpr UINT_PTR kTimerReassertTopmost = 100;
+
+#ifdef _DEBUG
+    HFONT m_debugFont = nullptr;  // Fuente para el panel de debug
+
+    // Stats del debug panel (actualizadas desde el overlay thread)
+    std::mutex   m_debugStatsMutex;
+    DebugStats   m_debugStats;
+
+    // Dibuja el panel de debug en la esquina superior izquierda
+    void DrawDebugPanel();
+#endif
 };
 
 } // namespace antipop::overlay

@@ -18,7 +18,8 @@
 #include <cstdint>
 #include <d3d11.h>
 
-namespace antipop::detector {
+namespace antipop {
+namespace detector {
 
 class GpuPreprocess {
 public:
@@ -72,6 +73,7 @@ private:
     bool m_initialized = false;
 };
 
-} // namespace antipop::detector
+} // namespace detector
+} // namespace antipop
 
 #endif // ANTIPOP_USE_CUDA

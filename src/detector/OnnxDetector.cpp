@@ -219,6 +219,10 @@ void OnnxDetector::WarmUp() {
     }
 }
 
+bool OnnxDetector::IsUsingGpu() const {
+    return m_initialized && m_onnx && m_onnx->usingCudaEP;
+}
+
 std::vector<Detection> OnnxDetector::Detect(
     const uint8_t* imageData,
     uint32_t width,

@@ -1,7 +1,29 @@
 {
   "permissions": {
     "allow": [
-      "Bash(ls -la /c/Users/Abori/Documents/Work/Repositories/AntiPop/*.cfg)"
+      "Bash(ls -la /c/Users/Abori/Documents/Work/Repositories/AntiPop/*.cfg)",
+      "Bash(ls -la *.dll)",
+      "Bash(unzip -l packages/Microsoft.ML.OnnxRuntime.Gpu.1.24.3/Microsoft.ML.OnnxRuntime.Gpu.1.24.3.nupkg)",
+      "Bash(ls \"c:/Users/Abori/Documents/Work/Repositories/AntiPop/x64/Debug/\"*.dll)",
+      "Bash(\"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1/bin/nvcc\" --version)",
+      "Bash(\"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1/bin/nvcc\" --list-gpu-arch)",
+      "Bash(dotnet package search \"Microsoft.ML.OnnxRuntime.Gpu\" --take 10)",
+      "Bash(nuget install Microsoft.ML.OnnxRuntime.Gpu.Windows -Version 1.24.3 -OutputDirectory packages)",
+      "Bash(where.exe nuget.exe)",
+      "Read(//c/Program Files/Microsoft Visual Studio/**)",
+      "Bash(./nuget.exe install Microsoft.ML.OnnxRuntime.Gpu.Windows -Version 1.24.3 -OutputDirectory packages)",
+      "Bash(./nuget.exe install Microsoft.ML.OnnxRuntime -Version 1.24.3 -OutputDirectory packages)",
+      "Bash(\"C:/Program Files/Microsoft Visual Studio/2026/Community/MSBuild/Current/Bin/MSBuild.exe\" anti-pop.vcxproj /p:Configuration=Debug /p:Platform=x64 /t:Build /v:minimal)",
+      "Bash(\"C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe\" anti-pop.vcxproj /p:Configuration=Debug /p:Platform=x64 /t:Build /v:minimal)",
+      "Bash(\"C:/Program Files/Microsoft Visual Studio/18/Community/MSBuild/Current/Bin/amd64/MSBuild.exe\" anti-pop.vcxproj -p:Configuration=Debug -p:Platform=x64 -t:Build -v:minimal)",
+      "Bash(\"C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/MSBuild.exe\" anti-pop.vcxproj -p:Configuration=Debug -p:Platform=x64 -t:Build -v:minimal)",
+      "Bash(\"C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/MSBuild.exe\" anti-pop.vcxproj -p:Configuration=Debug -p:Platform=x64 -p:CudaToolkitDir=\"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1/\" -t:Build -v:minimal)",
+      "Bash(ls \"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.1/bin/\"*.dll)",
+      "Bash(\"C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/dumpbin.exe\" -dependents onnxruntime_providers_cuda.dll)",
+      "Bash(\"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.6/bin/nvcc.exe\" --list-gpu-arch)",
+      "Bash(where cublas64_12.dll)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(where cudart64_12.dll)"
     ]
   }
 }

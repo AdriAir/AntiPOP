@@ -67,6 +67,12 @@ bool App::Initialize(HINSTANCE hInstance, bool silentMode) {
     }
     m_detector->SetConfidenceThreshold(cfg.confidenceThreshold);
 
+    // Guardar si GPU esta activa para el debug overlay
+    {
+        auto* onnxDet = dynamic_cast<detector::OnnxDetector*>(m_detector.get());
+        m_state.metrics.usingGpu = onnxDet && onnxDet->IsUsingGpu();
+    }
+
     // 5. Inicializar overlay
     m_overlay = std::make_unique<overlay::OverlayWindow>();
     if (!m_overlay->Initialize(hInstance)) {
@@ -262,6 +268,10 @@ void App::InferenceThread() {
         // Swap atomico: el overlay ahora lee el nuevo slot
         m_state.activeSlot.store(writeSlot, std::memory_order_release);
 
+        // Actualizar conteo de detecciones para debug overlay (no critico)
+        m_state.metrics.detectionCount = static_cast<int>(
+            m_state.slots[writeSlot].detections.size());
+
         // Actualizar metricas periodicamente
         double totalMs = totalTimer.ElapsedMs();
         metricsCounter++;
@@ -298,6 +308,10 @@ void App::OverlayThread() {
 
     uint64_t lastSeenFrameId = 0;
     int framesWithoutNewDetections = 0;
+
+    // Metricas de overlay FPS (EMA)
+    double avgOverlayMs = 1000.0 / targetFps;
+    int overlayFrameCount = 0;
 
     while (m_state.running.load(std::memory_order_relaxed)) {
         auto frameStart = clock::now();
@@ -340,6 +354,31 @@ void App::OverlayThread() {
         // Spin-wait preciso para los ultimos ~1ms
         while (clock::now() - frameStart < frameTime) {
             _mm_pause();  // Hint al CPU: estamos en spin-wait
+        }
+
+        // Calcular overlay FPS real (EMA)
+        double frameMs = std::chrono::duration<double, std::milli>(
+            clock::now() - frameStart).count();
+        avgOverlayMs = avgOverlayMs * 0.95 + frameMs * 0.05;
+
+        // Publicar overlay FPS cada 30 frames (~0.5s a 60fps)
+        if (++overlayFrameCount % 30 == 0) {
+            m_state.metrics.overlayFps = (avgOverlayMs > 0.0) ? 1000.0 / avgOverlayMs : 0.0;
+            m_state.metricsUpdated.store(true, std::memory_order_relaxed);
+
+#ifdef _DEBUG
+            // Notificar al overlay para que actualice su panel de debug
+            if (m_overlayWindow) {
+                overlay::OverlayWindow::DebugStats ds;
+                ds.inferenceFps   = m_state.metrics.fps;
+                ds.overlayFps     = m_state.metrics.overlayFps;
+                ds.inferenceMs    = m_state.metrics.inferenceMs;
+                ds.detectionCount = m_state.metrics.detectionCount;
+                ds.framesSkipped  = m_state.metrics.framesSkipped;
+                ds.usingGpu       = m_state.metrics.usingGpu;
+                m_overlayWindow->SetDebugStats(ds);
+            }
+#endif
         }
     }
 

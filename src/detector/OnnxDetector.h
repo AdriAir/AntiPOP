@@ -38,6 +38,10 @@ public:
     void SetUseGpu(bool useGpu) { m_useGpu = useGpu; }
     void SetUseFP16(bool useFP16) { m_useFP16 = useFP16; }
 
+    // Retorna true si CUDA EP esta activo (GPU real). False = CPU fallback.
+    // Solo valido despues de Initialize().
+    [[nodiscard]] bool IsUsingGpu() const;
+
 private:
     // Preprocesa la imagen IN-PLACE en el buffer pre-alocado m_inputTensor.
     // Redimensiona a la entrada del modelo y normaliza (CHW, RGB, [0,1]).

@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <Import Project="packages\Microsoft.ML.OnnxRuntime.1.24.2\build\native\Microsoft.ML.OnnxRuntime.props" Condition="Exists('packages\Microsoft.ML.OnnxRuntime.1.24.2\build\native\Microsoft.ML.OnnxRuntime.props')" />
+  <Import Project="packages\Microsoft.ML.OnnxRuntime.1.24.3\build\native\Microsoft.ML.OnnxRuntime.props" Condition="Exists('packages\Microsoft.ML.OnnxRuntime.1.24.3\build\native\Microsoft.ML.OnnxRuntime.props')" />
+  <Import Project="packages\Microsoft.ML.OnnxRuntime.Gpu.Windows.1.24.3\buildTransitive\native\Microsoft.ML.OnnxRuntime.Gpu.Windows.props" Condition="Exists('packages\Microsoft.ML.OnnxRuntime.Gpu.Windows.1.24.3\buildTransitive\native\Microsoft.ML.OnnxRuntime.Gpu.Windows.props')" />
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Debug|Win32">
       <Configuration>Debug</Configuration>
@@ -55,7 +56,7 @@
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.3.props" />
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.6.props" />
   </ImportGroup>
   <ImportGroup Label="Shared">
   </ImportGroup>
@@ -126,6 +127,21 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>d3d11.lib;dxgi.lib;gdi32.lib;user32.lib;shell32.lib;advapi32.lib;cudart.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>xcopy /Y /D "$(ProjectDir)packages\Microsoft.ML.OnnxRuntime.Gpu.Windows.1.24.3\runtimes\win-x64\native\*.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\cublas64_12.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\cublasLt64_12.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\cudart64_12.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\cufft64_11.dll" "$(OutDir)"
+xcopy /Y /D "C:\Program Files\NVIDIA\CUDNN\v9.19\bin\12.9\x64\cudnn64_9.dll" "$(OutDir)"
+xcopy /Y /D "C:\Program Files\NVIDIA\CUDNN\v9.19\bin\12.9\x64\cudnn_adv64_9.dll" "$(OutDir)"
+xcopy /Y /D "C:\Program Files\NVIDIA\CUDNN\v9.19\bin\12.9\x64\cudnn_cnn64_9.dll" "$(OutDir)"
+xcopy /Y /D "C:\Program Files\NVIDIA\CUDNN\v9.19\bin\12.9\x64\cudnn_ops64_9.dll" "$(OutDir)"
+xcopy /Y /D "C:\Program Files\NVIDIA\CUDNN\v9.19\bin\12.9\x64\cudnn_graph64_9.dll" "$(OutDir)"
+xcopy /Y /D "C:\Program Files\NVIDIA\CUDNN\v9.19\bin\12.9\x64\cudnn_engines_precompiled64_9.dll" "$(OutDir)"
+xcopy /Y /D "C:\Program Files\NVIDIA\CUDNN\v9.19\bin\12.9\x64\cudnn_engines_runtime_compiled64_9.dll" "$(OutDir)"
+xcopy /Y /D "C:\Program Files\NVIDIA\CUDNN\v9.19\bin\12.9\x64\cudnn_heuristic64_9.dll" "$(OutDir)"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -143,6 +159,21 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>d3d11.lib;dxgi.lib;gdi32.lib;user32.lib;shell32.lib;advapi32.lib;cudart.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>xcopy /Y /D "$(ProjectDir)packages\Microsoft.ML.OnnxRuntime.Gpu.Windows.1.24.3\runtimes\win-x64\native\*.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\cublas64_12.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\cublasLt64_12.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\cudart64_12.dll" "$(OutDir)"
+xcopy /Y /D "$(CUDA_PATH)\bin\cufft64_11.dll" "$(OutDir)"
+xcopy /Y /D "C:\Program Files\NVIDIA\CUDNN\v9.19\bin\12.9\x64\cudnn64_9.dll" "$(OutDir)"
+xcopy /Y /D "C:\Program Files\NVIDIA\CUDNN\v9.19\bin\12.9\x64\cudnn_adv64_9.dll" "$(OutDir)"
+xcopy /Y /D "C:\Program Files\NVIDIA\CUDNN\v9.19\bin\12.9\x64\cudnn_cnn64_9.dll" "$(OutDir)"
+xcopy /Y /D "C:\Program Files\NVIDIA\CUDNN\v9.19\bin\12.9\x64\cudnn_ops64_9.dll" "$(OutDir)"
+xcopy /Y /D "C:\Program Files\NVIDIA\CUDNN\v9.19\bin\12.9\x64\cudnn_graph64_9.dll" "$(OutDir)"
+xcopy /Y /D "C:\Program Files\NVIDIA\CUDNN\v9.19\bin\12.9\x64\cudnn_engines_precompiled64_9.dll" "$(OutDir)"
+xcopy /Y /D "C:\Program Files\NVIDIA\CUDNN\v9.19\bin\12.9\x64\cudnn_engines_runtime_compiled64_9.dll" "$(OutDir)"
+xcopy /Y /D "C:\Program Files\NVIDIA\CUDNN\v9.19\bin\12.9\x64\cudnn_heuristic64_9.dll" "$(OutDir)"</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <!-- ================================================================== -->
   <!-- Headers                                                             -->
@@ -201,18 +232,21 @@
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
-    <CudaCompile Include="src\detector\GpuPreprocess.cu" />
+    <CudaCompile Include="src\detector\GpuPreprocess.cu">
+      <CodeGeneration>compute_75,sm_75;compute_90,sm_90</CodeGeneration>
+    </CudaCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
-    <Import Project="packages\Microsoft.ML.OnnxRuntime.1.24.2\build\native\Microsoft.ML.OnnxRuntime.targets" Condition="Exists('packages\Microsoft.ML.OnnxRuntime.1.24.2\build\native\Microsoft.ML.OnnxRuntime.targets')" />
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.3.targets" />
+    <Import Project="packages\Microsoft.ML.OnnxRuntime.1.24.3\build\native\Microsoft.ML.OnnxRuntime.targets" Condition="Exists('packages\Microsoft.ML.OnnxRuntime.1.24.3\build\native\Microsoft.ML.OnnxRuntime.targets')" />
+    <Import Project="packages\Microsoft.ML.OnnxRuntime.Gpu.Windows.1.24.3\buildTransitive\native\Microsoft.ML.OnnxRuntime.Gpu.Windows.targets" Condition="Exists('packages\Microsoft.ML.OnnxRuntime.Gpu.Windows.1.24.3\buildTransitive\native\Microsoft.ML.OnnxRuntime.Gpu.Windows.targets')" />
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.6.targets" />
   </ImportGroup>
   <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
     <PropertyGroup>
       <ErrorText>This project references NuGet package(s) that are missing on this computer. Use NuGet Package Restore to download them.  For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
     </PropertyGroup>
-    <Error Condition="!Exists('packages\Microsoft.ML.OnnxRuntime.1.24.2\build\native\Microsoft.ML.OnnxRuntime.props')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.ML.OnnxRuntime.1.24.2\build\native\Microsoft.ML.OnnxRuntime.props'))" />
-    <Error Condition="!Exists('packages\Microsoft.ML.OnnxRuntime.1.24.2\build\native\Microsoft.ML.OnnxRuntime.targets')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.ML.OnnxRuntime.1.24.2\build\native\Microsoft.ML.OnnxRuntime.targets'))" />
+    <Error Condition="!Exists('packages\Microsoft.ML.OnnxRuntime.1.24.3\build\native\Microsoft.ML.OnnxRuntime.props')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.ML.OnnxRuntime.1.24.3\build\native\Microsoft.ML.OnnxRuntime.props'))" />
+    <Error Condition="!Exists('packages\Microsoft.ML.OnnxRuntime.Gpu.Windows.1.24.3\buildTransitive\native\Microsoft.ML.OnnxRuntime.Gpu.Windows.props')" Text="$([System.String]::Format('$(ErrorText)', 'packages\Microsoft.ML.OnnxRuntime.Gpu.Windows.1.24.3\buildTransitive\native\Microsoft.ML.OnnxRuntime.Gpu.Windows.props'))" />
   </Target>
 </Project>

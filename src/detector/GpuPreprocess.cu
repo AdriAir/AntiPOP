@@ -22,7 +22,8 @@
 
 #include <cstdio>
 
-namespace antipop::detector {
+namespace antipop {
+namespace detector {
 
 // ============================================================================
 // CUDA Kernel: resize BGRA -> RGB CHW normalizado
@@ -201,6 +202,7 @@ void GpuPreprocess::Shutdown() {
     m_initialized = false;
 }
 
-} // namespace antipop::detector
+} // namespace detector
+} // namespace antipop
 
 #endif // ANTIPOP_USE_CUDA

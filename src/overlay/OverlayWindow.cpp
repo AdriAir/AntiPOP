@@ -48,7 +48,80 @@ void OverlayWindow::InitializeGDICache() {
     m_pixelateBrushes[2] = CreateSolidBrush(RGB(60, 60, 60));
 
     LOG_INFO("GDI cache inicializado: {}x{}", m_cachedWidth, m_cachedHeight);
+
+#ifdef _DEBUG
+    // Fuente monoespaciada para el panel de debug
+    m_debugFont = CreateFontW(
+        16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, FIXED_PITCH | FF_MODERN,
+        L"Consolas"
+    );
+#endif
 }
+
+#ifdef _DEBUG
+void OverlayWindow::SetDebugStats(const DebugStats& stats) {
+    std::lock_guard lock(m_debugStatsMutex);
+    m_debugStats = stats;
+    if (m_hwnd) InvalidateRect(m_hwnd, nullptr, FALSE);
+}
+
+void OverlayWindow::DrawDebugPanel() {
+    if (!m_hdcMem || !m_debugFont) return;
+
+    DebugStats stats;
+    {
+        std::lock_guard lock(m_debugStatsMutex);
+        stats = m_debugStats;
+    }
+
+    constexpr int panelX = 10, panelY = 10;
+    constexpr int panelW = 280, panelH = 120;
+    RECT panelRect = { panelX, panelY, panelX + panelW, panelY + panelH };
+
+    HBRUSH bgBrush = CreateSolidBrush(RGB(20, 20, 20));
+    FillRect(m_hdcMem, &panelRect, bgBrush);
+    DeleteObject(bgBrush);
+
+    HPEN pen = CreatePen(PS_SOLID, 1, RGB(80, 80, 80));
+    HPEN oldPen = static_cast<HPEN>(SelectObject(m_hdcMem, pen));
+    HBRUSH oldBrush = static_cast<HBRUSH>(SelectObject(m_hdcMem, GetStockObject(NULL_BRUSH)));
+    Rectangle(m_hdcMem, panelX, panelY, panelX + panelW, panelY + panelH);
+    SelectObject(m_hdcMem, oldPen);
+    SelectObject(m_hdcMem, oldBrush);
+    DeleteObject(pen);
+
+    HFONT oldFont = static_cast<HFONT>(SelectObject(m_hdcMem, m_debugFont));
+    SetBkMode(m_hdcMem, TRANSPARENT);
+
+    wchar_t buf[80];
+
+    SetTextColor(m_hdcMem, RGB(200, 200, 200));
+    TextOutW(m_hdcMem, panelX + 8, panelY + 8, L"[AntiPop DEBUG]", 15);
+
+    swprintf_s(buf, L"Modo:    %s", stats.usingGpu ? L"GPU (CUDA)" : L"CPU");
+    SetTextColor(m_hdcMem, stats.usingGpu ? RGB(80, 220, 80) : RGB(220, 180, 80));
+    TextOutW(m_hdcMem, panelX + 8, panelY + 26, buf, static_cast<int>(wcslen(buf)));
+
+    swprintf_s(buf, L"Det:     %5.1f FPS  (%4.1f ms)", stats.inferenceFps, stats.inferenceMs);
+    SetTextColor(m_hdcMem, RGB(100, 180, 255));
+    TextOutW(m_hdcMem, panelX + 8, panelY + 44, buf, static_cast<int>(wcslen(buf)));
+
+    swprintf_s(buf, L"Overlay: %5.1f FPS", stats.overlayFps);
+    TextOutW(m_hdcMem, panelX + 8, panelY + 62, buf, static_cast<int>(wcslen(buf)));
+
+    swprintf_s(buf, L"Detecciones: %d", stats.detectionCount);
+    SetTextColor(m_hdcMem, stats.detectionCount > 0 ? RGB(255, 100, 100) : RGB(150, 150, 150));
+    TextOutW(m_hdcMem, panelX + 8, panelY + 80, buf, static_cast<int>(wcslen(buf)));
+
+    swprintf_s(buf, L"Saltados: %llu", stats.framesSkipped);
+    SetTextColor(m_hdcMem, RGB(150, 150, 150));
+    TextOutW(m_hdcMem, panelX + 8, panelY + 98, buf, static_cast<int>(wcslen(buf)));
+
+    SelectObject(m_hdcMem, oldFont);
+}
+#endif
 
 void OverlayWindow::ReleaseGDICache() {
     if (m_hdcMem) {
@@ -64,6 +137,10 @@ void OverlayWindow::ReleaseGDICache() {
         if (brush) { DeleteObject(brush); brush = nullptr; }
     }
     m_cachedWidth = m_cachedHeight = 0;
+
+#ifdef _DEBUG
+    if (m_debugFont) { DeleteObject(m_debugFont); m_debugFont = nullptr; }
+#endif
 }
 
 bool OverlayWindow::Initialize(HINSTANCE hInstance) {
@@ -243,6 +320,10 @@ void OverlayWindow::Repaint() {
             }
         }
     }
+
+#ifdef _DEBUG
+    DrawDebugPanel();
+#endif
 
     // Copiar el buffer al DC de la ventana (ya tiene color key configurado)
     HDC hdcWindow = GetDC(m_hwnd);
